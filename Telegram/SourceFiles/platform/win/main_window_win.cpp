@@ -7,12 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/win/main_window_win.h"
 
-#include "kotato/kotato_lang.h"
-#include "kotato/kotato_settings.h"
 #include "styles/style_window.h"
 #include "platform/platform_specific.h"
 #include "platform/platform_notifications_manager.h"
+#include "platform/win/tray_win.h"
 #include "platform/win/windows_dlls.h"
+#include "platform/win/integration_win.h"
 #include "window/notifications_manager.h"
 #include "window/window_session_controller.h"
 #include "mainwindow.h"
@@ -83,9 +83,7 @@ private:
 
 using namespace Microsoft::WRL;
 
-ComPtr<ITaskbarList3> taskbarList;
 bool handleSessionNotification = false;
-uint32 kTaskbarCreatedMsgId = 0;
 
 [[nodiscard]] HICON NativeIcon(const QIcon &icon, QSize size) {
 	if (!icon.isNull()) {
@@ -95,78 +93,6 @@ uint32 kTaskbarCreatedMsgId = 0;
 		}
 	}
 	return nullptr;
-}
-
-[[nodiscard]] QImage IconWithCounter(
-		Window::CounterLayerArgs &&args,
-		Main::Session *session,
-		bool smallIcon) {
-	static constexpr auto kCount = 3;
-	static constexpr auto kLogoCount = 7;
-	static constexpr auto kTotalCount = kLogoCount * kCount;
-	static auto ScaledLogo = std::array<QImage, kTotalCount>();
-	static auto ScaledLogoNoMargin = std::array<QImage, kTotalCount>();
-	static auto CustomIcon = QImage(cWorkingDir() + "tdata/icon.png");
-
-	struct Dimensions {
-		int index = 0;
-		int size = 0;
-	};
-	const auto d = [&]() -> Dimensions {
-		switch (args.size) {
-		case 16:
-			return {
-				.index = 0,
-				.size = 16,
-			};
-		case 32:
-			return {
-				.index = 1,
-				.size = 32,
-			};
-		default:
-			return {
-				.index = 2,
-				.size = 64,
-			};
-		}
-	}();
-	Assert(d.index < kCount);
-
-	auto &scaled = smallIcon ? ScaledLogoNoMargin : ScaledLogo;
-	auto result = [&] {
-		const auto idx = CustomIcon.isNull()
-			? ::Kotato::JsonSettings::GetInt("custom_app_icon")
-			: kLogoCount - 1;
-		auto &image = scaled[idx * kCount + d.index];
-
-		if (image.isNull()) {
-			image = !CustomIcon.isNull()
-				? CustomIcon.scaledToWidth(d.size, Qt::SmoothTransformation)
-				: (smallIcon
-					? Window::LogoNoMargin(::Kotato::JsonSettings::GetInt("custom_app_icon"))
-					: Window::Logo(::Kotato::JsonSettings::GetInt("custom_app_icon"))).scaledToWidth(
-						d.size,
-						Qt::SmoothTransformation);
-		}
-		return image;
-	}();
-	if (session && session->supportMode()) {
-		Window::ConvertIconToBlack(result);
-	}
-	if (!args.count) {
-		return result;
-	} else if (smallIcon) {
-		return Window::WithSmallCounter(std::move(result), std::move(args));
-	}
-	QPainter p(&result);
-	const auto half = d.size / 2;
-	args.size = half;
-	p.drawPixmap(
-		half,
-		half,
-		Ui::PixmapFromImage(Window::GenerateCounterLayer(std::move(args))));
-	return result;
 }
 
 EventFilter::EventFilter(not_null<MainWindow*> window) : _window(window) {
@@ -197,15 +123,6 @@ bool EventFilter::mainWindowEvent(
 		WPARAM wParam,
 		LPARAM lParam,
 		LRESULT *result) {
-	if (const auto tbCreatedMsgId = kTaskbarCreatedMsgId) {
-		if (msg == tbCreatedMsgId) {
-			HRESULT hr = CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&taskbarList));
-			if (!SUCCEEDED(hr)) {
-				taskbarList.Reset();
-			}
-		}
-	}
-
 	switch (msg) {
 
 	case WM_DESTROY: {
@@ -252,9 +169,6 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 , _taskbarHiderWindow(std::make_unique<QWindow>()) {
 	qApp->installNativeEventFilter(&_private->filter);
 
-	if (!kTaskbarCreatedMsgId) {
-		kTaskbarCreatedMsgId = RegisterWindowMessage(L"TaskbarButtonCreated");
-	}
 	setupNativeWindowFrame();
 
 	using namespace rpl::mappers;
@@ -288,12 +202,14 @@ void MainWindow::shadowsDeactivate() {
 	_hasActiveFrame = false;
 }
 
-void MainWindow::psShowTrayMenu() {
-	trayIconMenu->popup(QCursor::pos());
-}
-
 void MainWindow::destroyedFromSystem() {
-	Core::Quit();
+	if (isPrimary()) {
+		Core::Quit();
+	} else {
+		crl::on_main(this, [=] {
+			Core::App().closeWindow(&controller());
+		});
+	}
 }
 
 int32 MainWindow::screenNameChecksum(const QString &name) const {
@@ -321,49 +237,11 @@ void MainWindow::forceIconRefresh() {
 	updateIconCounters();
 }
 
-void MainWindow::psTrayMenuUpdated() {
-}
-
-void MainWindow::psSetupTrayIcon() {
-	if (!trayIcon) {
-		trayIcon = new QSystemTrayIcon(this);
-		auto icon = QIcon(cWorkingDir() + "tdata/icon.png");
-		if (icon.isNull()) {
-			icon = QIcon(Ui::PixmapFromImage(
-				QImage(Window::LogoNoMargin(::Kotato::JsonSettings::GetInt("custom_app_icon")))));
-		}
-
-		trayIcon->setIcon(icon);
-		connect(
-			trayIcon,
-			&QSystemTrayIcon::messageClicked,
-			this,
-			[=] { showFromTray(); });
-		attachToTrayIcon(trayIcon);
-	}
-	updateIconCounters();
-
-	trayIcon->show();
-}
-
-void MainWindow::showTrayTooltip() {
-	if (trayIcon && !cSeenTrayTooltip()) {
-		trayIcon->showMessage(
-			AppName.utf16(),
-			ktr("ktg_tray_icon_text"),
-			QSystemTrayIcon::Information,
-			10000);
-		cSetSeenTrayTooltip(true);
-		Local::writeSettings();
-	}
-}
-
 void MainWindow::workmodeUpdated(Core::Settings::WorkMode mode) {
 	using WorkMode = Core::Settings::WorkMode;
 
 	switch (mode) {
 	case WorkMode::WindowAndTray: {
-		psSetupTrayIcon();
 		HWND psOwner = (HWND)GetWindowLongPtr(_hWnd, GWLP_HWNDPARENT);
 		if (psOwner) {
 			SetWindowLongPtr(_hWnd, GWLP_HWNDPARENT, 0);
@@ -373,7 +251,6 @@ void MainWindow::workmodeUpdated(Core::Settings::WorkMode mode) {
 	} break;
 
 	case WorkMode::TrayOnly: {
-		psSetupTrayIcon();
 		HWND psOwner = (HWND)GetWindowLongPtr(_hWnd, GWLP_HWNDPARENT);
 		if (!psOwner) {
 			const auto hwnd = _taskbarHiderWindow->winId();
@@ -383,12 +260,6 @@ void MainWindow::workmodeUpdated(Core::Settings::WorkMode mode) {
 	} break;
 
 	case WorkMode::WindowOnly: {
-		if (trayIcon) {
-			trayIcon->setContextMenu(0);
-			trayIcon->deleteLater();
-		}
-		trayIcon = 0;
-
 		HWND psOwner = (HWND)GetWindowLongPtr(_hWnd, GWLP_HWNDPARENT);
 		if (psOwner) {
 			SetWindowLongPtr(_hWnd, GWLP_HWNDPARENT, 0);
@@ -412,16 +283,10 @@ bool MainWindow::initGeometryFromSystem() {
 	if (!hasTabletView()) {
 		return false;
 	}
-	const auto screen = [&] {
-		if (const auto result = windowHandle()->screen()) {
-			return result;
-		}
-		return QGuiApplication::primaryScreen();
-	}();
-	if (!screen) {
+	if (!screen()) {
 		return false;
 	}
-	Ui::RpWidget::setGeometry(screen->availableGeometry());
+	Ui::RpWidget::setGeometry(screen()->availableGeometry());
 	return true;
 }
 
@@ -465,47 +330,30 @@ void MainWindow::updateIconCounters() {
 	const auto iconSizeBig = QSize(
 		GetSystemMetrics(SM_CXICON),
 		GetSystemMetrics(SM_CYICON));
+	const auto supportMode = session && session->supportMode();
 
-	const auto &bg = muted ? st::trayCounterBgMute : st::trayCounterBg;
-	const auto &fg = st::trayCounterFg;
-	const auto counterArgs = [&](int size, int counter) {
-		return Window::CounterLayerArgs{
-			.size = size,
-			.count = counter,
-			.bg = bg,
-			.fg = fg,
-		};
-	};
-	const auto iconWithCounter = [&](int size, int counter, bool smallIcon) {
-		return Ui::PixmapFromImage(IconWithCounter(
-			counterArgs(size, counter),
-			session,
-			smallIcon));
-	};
-
-	auto iconSmallPixmap16 = iconWithCounter(16, counter, true);
-	auto iconSmallPixmap32 = iconWithCounter(32, counter, true);
+	auto iconSmallPixmap16 = Tray::IconWithCounter(
+		Tray::CounterLayerArgs(16, counter, muted),
+		true,
+		supportMode);
+	auto iconSmallPixmap32 = Tray::IconWithCounter(
+		Tray::CounterLayerArgs(32, counter, muted),
+		true,
+		supportMode);
 	QIcon iconSmall, iconBig;
 	iconSmall.addPixmap(iconSmallPixmap16);
 	iconSmall.addPixmap(iconSmallPixmap32);
-	const auto bigCounter = taskbarList.Get() ? 0 : counter;
-	iconBig.addPixmap(iconWithCounter(32, bigCounter, false));
-	iconBig.addPixmap(iconWithCounter(64, bigCounter, false));
-	if (trayIcon) {
-		// Force Qt to use right icon size, not the larger one.
-		QIcon forTrayIcon;
-		const auto disableTrayCounter = ::Kotato::JsonSettings::GetBool("disable_tray_counter");
-		auto forTrayIcon16 = disableTrayCounter
-			? iconWithCounter(16, 0, true)
-			: iconSmallPixmap16;
-		auto forTrayIcon32 = disableTrayCounter
-			? iconWithCounter(32, 0, true)
-			: iconSmallPixmap32;
-		forTrayIcon.addPixmap(iconSizeSmall.width() >= 20
-			? forTrayIcon32
-			: forTrayIcon16);
-		trayIcon->setIcon(forTrayIcon);
-	}
+	const auto integration = &Platform::WindowsIntegration::Instance();
+	const auto taskbarList = integration->taskbarList();
+	const auto bigCounter = taskbarList ? 0 : counter;
+	iconBig.addPixmap(Tray::IconWithCounter(
+		Tray::CounterLayerArgs(32, bigCounter, muted),
+		false,
+		supportMode));
+	iconBig.addPixmap(Tray::IconWithCounter(
+		Tray::CounterLayerArgs(64, bigCounter, muted),
+		false,
+		supportMode));
 
 	destroyCachedIcons();
 	_iconSmall = NativeIcon(iconSmall, iconSizeSmall);
@@ -516,7 +364,7 @@ void MainWindow::updateIconCounters() {
 		if (counter > 0) {
 			const auto pixmap = [&](int size) {
 				return Ui::PixmapFromImage(Window::GenerateCounterLayer(
-					counterArgs(size, counter)));
+					Tray::CounterLayerArgs(size, counter, muted)));
 			};
 			QIcon iconOverlay;
 			iconOverlay.addPixmap(pixmap(16));
@@ -650,17 +498,6 @@ void MainWindow::validateWindowTheme(bool native, bool night) {
 	SendMessage(_hWnd, WM_NCACTIVATE, _hasActiveFrame ? 1 : 0, 0);
 }
 
-void MainWindow::showFromTrayMenu() {
-	// If we try to activate() window before the trayIconMenu is hidden,
-	// then the window will be shown in semi-active state (Qt bug).
-	// It will receive input events, but it will be rendered as inactive.
-	using namespace rpl::mappers;
-	_showFromTrayLifetime = trayIconMenu->shownValue(
-	) | rpl::filter(_1) | rpl::take(1) | rpl::start_with_next([=] {
-		showFromTray();
-	});
-}
-
 HWND MainWindow::psHwnd() const {
 	return _hWnd;
 }
@@ -680,9 +517,6 @@ void MainWindow::destroyCachedIcons() {
 MainWindow::~MainWindow() {
 	WTSUnRegisterSessionNotification(_hWnd);
 	_private->viewSettings.Reset();
-	if (taskbarList) {
-		taskbarList.Reset();
-	}
 	destroyCachedIcons();
 }
 

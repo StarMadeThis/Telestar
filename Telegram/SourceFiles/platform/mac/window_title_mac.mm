@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_window_title.h"
 
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "core/application.h"
 #include "styles/style_window.h"
 #include "styles/style_media_view.h"
@@ -76,9 +77,9 @@ void PreviewWindowTitle(Painter &p, const style::palette &palette, QRect body, i
 	}
 
 	p.setPen(st::titleFgActive[palette]);
-	p.setFont(style::font(font.pixelSize(), 0, font.family()));
+	p.setFont(font);
 
-	p.drawText(titleRect, qsl("Kotatogram"), style::al_center);
+	p.drawText(titleRect, u"Telegram"_q, style::al_center);
 
 	auto isGraphite = ([NSColor currentControlTint] == NSGraphiteControlTint);
 	auto buttonSkip = 8;
