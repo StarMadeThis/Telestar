@@ -1,62 +1,10 @@
 <RCC>
-  <qresource prefix="/export">
-    <file alias="css/style.css">../../export_html/css/style.css</file>
-    <file alias="images/back.png">../../export_html/images/back.png</file>
-    <file alias="images/back@2x.png">../../export_html/images/back@2x.png</file>
-    <file alias="images/media_call.png">../../export_html/images/media_call.png</file>
-    <file alias="images/media_call@2x.png">../../export_html/images/media_call@2x.png</file>
-    <file alias="images/media_contact.png">../../export_html/images/media_contact.png</file>
-    <file alias="images/media_contact@2x.png">../../export_html/images/media_contact@2x.png</file>
-    <file alias="images/media_file.png">../../export_html/images/media_file.png</file>
-    <file alias="images/media_file@2x.png">../../export_html/images/media_file@2x.png</file>
-    <file alias="images/media_game.png">../../export_html/images/media_game.png</file>
-    <file alias="images/media_game@2x.png">../../export_html/images/media_game@2x.png</file>
-    <file alias="images/media_location.png">../../export_html/images/media_location.png</file>
-    <file alias="images/media_location@2x.png">../../export_html/images/media_location@2x.png</file>
-    <file alias="images/media_music.png">../../export_html/images/media_music.png</file>
-    <file alias="images/media_music@2x.png">../../export_html/images/media_music@2x.png</file>
-    <file alias="images/media_photo.png">../../export_html/images/media_photo.png</file>
-    <file alias="images/media_photo@2x.png">../../export_html/images/media_photo@2x.png</file>
-    <file alias="images/media_shop.png">../../export_html/images/media_shop.png</file>
-    <file alias="images/media_shop@2x.png">../../export_html/images/media_shop@2x.png</file>
-    <file alias="images/media_video.png">../../export_html/images/media_video.png</file>
-    <file alias="images/media_video@2x.png">../../export_html/images/media_video@2x.png</file>
-    <file alias="images/media_voice.png">../../export_html/images/media_voice.png</file>
-    <file alias="images/media_voice@2x.png">../../export_html/images/media_voice@2x.png</file>
-    <file alias="images/section_calls.png">../../export_html/images/section_calls.png</file>
-    <file alias="images/section_calls@2x.png">../../export_html/images/section_calls@2x.png</file>
-    <file alias="images/section_chats.png">../../export_html/images/section_chats.png</file>
-    <file alias="images/section_chats@2x.png">../../export_html/images/section_chats@2x.png</file>
-    <file alias="images/section_contacts.png">../../export_html/images/section_contacts.png</file>
-    <file alias="images/section_contacts@2x.png">../../export_html/images/section_contacts@2x.png</file>
-    <file alias="images/section_frequent.png">../../export_html/images/section_frequent.png</file>
-    <file alias="images/section_frequent@2x.png">../../export_html/images/section_frequent@2x.png</file>
-    <file alias="images/section_other.png">../../export_html/images/section_other.png</file>
-    <file alias="images/section_other@2x.png">../../export_html/images/section_other@2x.png</file>
-    <file alias="images/section_photos.png">../../export_html/images/section_photos.png</file>
-    <file alias="images/section_photos@2x.png">../../export_html/images/section_photos@2x.png</file>
-    <file alias="images/section_sessions.png">../../export_html/images/section_sessions.png</file>
-    <file alias="images/section_sessions@2x.png">../../export_html/images/section_sessions@2x.png</file>
-    <file alias="images/section_web.png">../../export_html/images/section_web.png</file>
-    <file alias="images/section_web@2x.png">../../export_html/images/section_web@2x.png</file>
-    <file alias="js/script.js">../../export_html/js/script.js</file>
-  </qresource>
   <qresource prefix="/gui">
     <file alias="art/background.tgv">../../art/background.tgv</file>
     <file alias="art/bg_thumbnail.png">../../art/bg_thumbnail.png</file>
     <file alias="art/bg_initial.jpg">../../art/bg_initial.jpg</file>
     <file alias="art/logo_256.png">../../art/logo_256.png</file>
-    <file alias="art/logo_256_blue.png">../../art/logo_256_blue.png</file>
-    <file alias="art/logo_256_green.png">../../art/logo_256_green.png</file>
-    <file alias="art/logo_256_orange.png">../../art/logo_256_orange.png</file>
-    <file alias="art/logo_256_red.png">../../art/logo_256_red.png</file>
-    <file alias="art/logo_256_old.png">../../art/logo_256_old.png</file>
     <file alias="art/logo_256_no_margin.png">../../art/logo_256_no_margin.png</file>
-    <file alias="art/logo_256_no_margin_blue.png">../../art/logo_256_no_margin_blue.png</file>
-    <file alias="art/logo_256_no_margin_green.png">../../art/logo_256_no_margin_green.png</file>
-    <file alias="art/logo_256_no_margin_orange.png">../../art/logo_256_no_margin_orange.png</file>
-    <file alias="art/logo_256_no_margin_red.png">../../art/logo_256_no_margin_red.png</file>
-    <file alias="art/logo_256_no_margin_old.png">../../art/logo_256_no_margin_old.png</file>
     <file alias="art/themeimage.jpg">../../art/themeimage.jpg</file>
     <file alias="art/dice_idle.tgs">../../art/dice_idle.tgs</file>
     <file alias="art/dart_idle.tgs">../../art/dart_idle.tgs</file>
@@ -77,6 +25,17 @@
     <file alias="recording/info_audio.svg">../../art/recording/recording_info_audio.svg</file>
     <file alias="recording/info_video_landscape.svg">../../art/recording/recording_info_video_landscape.svg</file>
     <file alias="recording/info_video_portrait.svg">../../art/recording/recording_info_video_portrait.svg</file>
+    <file alias="icons/settings/dino.svg">../../icons/settings/dino.svg</file>
+    <file alias="icons/settings/star.svg">../../icons/settings/star.svg</file>
+    <file alias="icons/settings/starmini.svg">../../icons/settings/starmini.svg</file>
+    <file alias="topic_icons/blue.svg">../../art/topic_icons/blue.svg</file>
+    <file alias="topic_icons/yellow.svg">../../art/topic_icons/yellow.svg</file>
+    <file alias="topic_icons/violet.svg">../../art/topic_icons/violet.svg</file>
+    <file alias="topic_icons/green.svg">../../art/topic_icons/green.svg</file>
+    <file alias="topic_icons/rose.svg">../../art/topic_icons/rose.svg</file>
+    <file alias="topic_icons/red.svg">../../art/topic_icons/red.svg</file>
+    <file alias="topic_icons/gray.svg">../../art/topic_icons/gray.svg</file>
+    <file alias="topic_icons/general.svg">../../art/topic_icons/general.svg</file>
   </qresource>
   <qresource prefix="/icons">
     <file alias="calls/hands.lottie">../../icons/calls/hands.lottie</file>
@@ -95,24 +54,6 @@
   </qresource>
   <qresource prefix="/misc">
     <file alias="default_shortcuts-custom.json">../../default_shortcuts-custom.json</file>
-    <file alias="default_kotato-settings-custom.json">../../default_kotato-settings-custom.json</file>
-    <file alias="kotatogramdesktop.desktop">../../../../lib/xdg/kotatogramdesktop.desktop</file>
-  </qresource>
-  <qresource prefix="/ktg_lang">
-    <file alias="alttg.json">../../langs/rewrites/alttg.json</file>
-    <file alias="ar.json">../../langs/rewrites/ar.json</file>
-    <file alias="de.json">../../langs/rewrites/de.json</file>
-    <file alias="en.json">../../langs/rewrites/en.json</file>
-    <file alias="es.json">../../langs/rewrites/es.json</file>
-    <file alias="fa.json">../../langs/rewrites/fa.json</file>
-    <file alias="fr.json">../../langs/rewrites/fr.json</file>
-    <file alias="he.json">../../langs/rewrites/he.json</file>
-    <file alias="it.json">../../langs/rewrites/it.json</file>
-    <file alias="pl.json">../../langs/rewrites/pl.json</file>
-    <file alias="pt-br.json">../../langs/rewrites/pt-br.json</file>
-    <file alias="ru.json">../../langs/rewrites/ru.json</file>
-    <file alias="tr.json">../../langs/rewrites/tr.json</file>
-    <file alias="uk.json">../../langs/rewrites/uk.json</file>
-    <file alias="zh.json">../../langs/rewrites/zh.json</file>
+    <file alias="org.telegram.desktop.desktop">../../../../lib/xdg/org.telegram.desktop.desktop</file>
   </qresource>
 </RCC>
