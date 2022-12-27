@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localimageloader.h"
 #include "core/mime_type.h"
 #include "ui/image/image_prepare.h"
-#include "ui/chat/attach/attach_extensions.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "core/crash_reports.h"
 
@@ -28,23 +27,12 @@ using Ui::PreparedList;
 
 using Image = PreparedFileInformation::Image;
 
-bool HasExtensionFrom(const QString &file, const QStringList &extensions) {
-	for (const auto &extension : extensions) {
-		const auto ext = file.right(extension.size());
-		if (ext.compare(extension, Qt::CaseInsensitive) == 0) {
-			return true;
-		}
-	}
-	return false;
-}
-
 bool ValidPhotoForAlbum(
 		const Image &image,
 		const QString &mime) {
 	Expects(!image.data.isNull());
 
 	if (image.animated
-		|| Core::IsMimeSticker(mime)
 		|| (!mime.isEmpty() && !mime.startsWith(u"image/"))) {
 		return false;
 	}
@@ -88,20 +76,21 @@ void PrepareDetailsInParallel(PreparedList &result, int previewWidth) {
 } // namespace
 
 bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
-	if (data->urls().size() > 1) {
+	const auto urls = base::GetMimeUrls(data);
+	if (urls.size() > 1) {
 		return false;
 	} else if (data->hasImage()) {
 		return true;
 	}
 
-	if (data->hasUrls()) {
-		const auto url = data->urls().front();
+	if (!urls.isEmpty()) {
+		const auto url = urls.front();
 		if (url.isLocalFile()) {
 			using namespace Core;
-			const auto info = QFileInfo(Platform::File::UrlToLocal(url));
-			const auto filename = info.fileName();
-			return FileIsImage(filename, MimeTypeForFile(info).name())
-				&& HasExtensionFrom(filename, Ui::ExtensionsForCompression());
+			const auto file = Platform::File::UrlToLocal(url);
+			const auto info = QFileInfo(file);
+			return FileIsImage(file, MimeTypeForFile(info).name())
+				&& QImageReader(file).canRead();
 		}
 	}
 
@@ -111,14 +100,15 @@ bool ValidatePhotoEditorMediaDragData(not_null<const QMimeData*> data) {
 bool ValidateEditMediaDragData(
 		not_null<const QMimeData*> data,
 		Ui::AlbumType albumType) {
-	if (data->urls().size() > 1) {
+	const auto urls = base::GetMimeUrls(data);
+	if (urls.size() > 1) {
 		return false;
 	} else if (data->hasImage()) {
 		return (albumType != Ui::AlbumType::Music);
 	}
 
-	if (albumType == Ui::AlbumType::PhotoVideo && data->hasUrls()) {
-		const auto url = data->urls().front();
+	if (albumType == Ui::AlbumType::PhotoVideo && !urls.isEmpty()) {
+		const auto url = urls.front();
 		if (url.isLocalFile()) {
 			using namespace Core;
 			const auto info = QFileInfo(Platform::File::UrlToLocal(url));
@@ -130,7 +120,7 @@ bool ValidateEditMediaDragData(
 }
 
 MimeDataState ComputeMimeDataState(const QMimeData *data) {
-	if (!data || data->hasFormat(qsl("application/x-td-forward"))) {
+	if (!data || data->hasFormat(u"application/x-td-forward"_q)) {
 		return MimeDataState::None;
 	}
 
@@ -138,17 +128,11 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 		return MimeDataState::Image;
 	}
 
-	const auto uriListFormat = qsl("text/uri-list");
-	if (!data->hasFormat(uriListFormat)) {
-		return MimeDataState::None;
-	}
-
-	const auto &urls = data->urls();
+	const auto urls = base::GetMimeUrls(data);
 	if (urls.isEmpty()) {
 		return MimeDataState::None;
 	}
 
-	const auto imageExtensions = Ui::ImageExtensions();
 	auto files = QStringList();
 	auto allAreSmallImages = true;
 	for (const auto &url : urls) {
@@ -162,13 +146,17 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 			return MimeDataState::None;
 		}
 
+		using namespace Core;
 		const auto filesize = info.size();
-		if (filesize > kFileSizeLimit) {
+		if (filesize > kFileSizePremiumLimit) {
 			return MimeDataState::None;
+		//} else if (filesize > kFileSizeLimit) {
+		//	return MimeDataState::PremiumFile;
 		} else if (allAreSmallImages) {
 			if (filesize > Images::kReadBytesLimit) {
 				allAreSmallImages = false;
-			} else if (!HasExtensionFrom(file, imageExtensions)) {
+			} else if (!FileIsImage(file, MimeTypeForFile(info).name())
+				|| !QImageReader(file).canRead()) {
 				allAreSmallImages = false;
 			}
 		}
@@ -178,7 +166,10 @@ MimeDataState ComputeMimeDataState(const QMimeData *data) {
 		: MimeDataState::Files;
 }
 
-PreparedList PrepareMediaList(const QList<QUrl> &files, int previewWidth) {
+PreparedList PrepareMediaList(
+		const QList<QUrl> &files,
+		int previewWidth,
+		bool premium) {
 	auto locals = QStringList();
 	locals.reserve(files.size());
 	for (const auto &url : files) {
@@ -190,10 +181,13 @@ PreparedList PrepareMediaList(const QList<QUrl> &files, int previewWidth) {
 		}
 		locals.push_back(Platform::File::UrlToLocal(url));
 	}
-	return PrepareMediaList(locals, previewWidth);
+	return PrepareMediaList(locals, previewWidth, premium);
 }
 
-PreparedList PrepareMediaList(const QStringList &files, int previewWidth) {
+PreparedList PrepareMediaList(
+		const QStringList &files,
+		int previewWidth,
+		bool premium) {
 	auto result = PreparedList();
 	result.files.reserve(files.size());
 	for (const auto &file : files) {
@@ -209,11 +203,14 @@ PreparedList PrepareMediaList(const QStringList &files, int previewWidth) {
 				PreparedList::Error::EmptyFile,
 				file
 			};
-		} else if (filesize > kFileSizeLimit) {
-			return {
+		} else if (filesize > kFileSizePremiumLimit
+			|| (filesize > kFileSizeLimit && !premium)) {
+			auto errorResult = PreparedList(
 				PreparedList::Error::TooLargeFile,
-				file
-			};
+				QString());
+			errorResult.files.emplace_back(file);
+			errorResult.files.back().size = filesize;
+			return errorResult;
 		}
 		if (result.files.size() < Ui::MaxAlbumItems()) {
 			result.files.emplace_back(file);
@@ -253,13 +250,14 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 		FileDialog::OpenResult &&result,
 		Fn<bool(const Ui::PreparedList&)> checkResult,
 		Fn<void(tr::phrase<>)> errorCallback,
-		int previewWidth) {
+		int previewWidth,
+		bool premium) {
 	if (result.paths.isEmpty() && result.remoteContent.isEmpty()) {
 		return std::nullopt;
 	}
 
 	auto list = result.remoteContent.isEmpty()
-		? PrepareMediaList(result.paths, previewWidth)
+		? PrepareMediaList(result.paths, previewWidth, premium)
 		: PrepareMediaFromImage(
 			QImage(),
 			std::move(result.remoteContent),
@@ -297,8 +295,7 @@ void PrepareDetails(PreparedFile &file, int previewWidth) {
 		if (ValidPhotoForAlbum(*image, file.information->filemime)) {
 			UpdateImageDetails(file, previewWidth);
 			file.type = PreparedFile::Type::Photo;
-		} else if (Core::IsMimeSticker(file.information->filemime)
-			|| image->animated) {
+		} else if (image->animated) {
 			file.type = PreparedFile::Type::None;
 		}
 	} else if (const auto video = std::get_if<Video>(

@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/localstorage.h"
 //
-
-#include "kotato/kotato_version.h"
 #include "storage/serialize_common.h"
 #include "storage/storage_account.h"
 #include "storage/details/storage_file_utilities.h"
@@ -22,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/update_checker.h"
 #include "core/file_location.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "media/audio/media_audio.h"
 #include "mtproto/mtproto_config.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -52,7 +51,7 @@ constexpr auto kWallPaperLegacySerializeTagId = int32(-111);
 constexpr auto kWallPaperSerializeTagId = int32(-112);
 constexpr auto kWallPaperSidesLimit = 10'000;
 
-const auto kThemeNewPathRelativeTag = qstr("special://new_tag");
+const auto kThemeNewPathRelativeTag = u"special://new_tag"_q;
 
 using namespace Storage::details;
 using Storage::FileKey;
@@ -84,7 +83,6 @@ bool _useGlobalBackgroundKeys = false;
 bool _backgroundCanWrite = true;
 
 int32 _oldSettingsVersion = 0;
-int32 _oldKotatoVersion = 0;
 bool _settingsRewriteNeeded = false;
 bool _settingsWriteAllowed = false;
 
@@ -145,7 +143,7 @@ void applyReadContext(ReadSettingsContext &&context) {
 
 bool _readOldSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
-	QFile file(cWorkingDir() + qsl("tdata/config"));
+	auto file = QFile(cWorkingDir() + u"tdata/config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old config..."));
 		QDataStream stream(&file);
@@ -242,9 +240,9 @@ void _readOldUserSettingsFields(
 bool _readOldUserSettings(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPrefix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPrefix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPrefix = QString();
-	QFile file(cWorkingDir() + cDataFile() + testPrefix + qsl("_config"));
+	QFile file(cWorkingDir() + cDataFile() + testPrefix + u"_config"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		LOG(("App Info: reading old user config..."));
 		qint32 version = 0;
@@ -323,7 +321,7 @@ void _readOldMtpDataFields(
 bool _readOldMtpData(bool remove, ReadSettingsContext &context) {
 	bool result = false;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto testPostfix = (cTestMode() ? qsl("_test") : QString());
+	//const auto testPostfix = (cTestMode() ? u"_test"_q : QString());
 	const auto testPostfix = QString();
 	QFile file(cWorkingDir() + cDataFile() + testPostfix);
 	if (file.open(QIODevice::ReadOnly)) {
@@ -357,16 +355,13 @@ void start() {
 
 	_localLoader = new TaskQueue(kFileLoaderQueueStopTimeout);
 
-	_basePath = cWorkingDir() + qsl("tdata/");
+	_basePath = cWorkingDir() + u"tdata/"_q;
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
-
-	_oldKotatoVersion = readKotatoVersion();
-	writeKotatoVersion(AppKotatoVersion);
 
 	ReadSettingsContext context;
 	FileReadDescriptor settingsData;
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	if (!ReadFile(settingsData, name, _basePath)) {
 		_readOldSettings(true, context);
@@ -447,7 +442,7 @@ void writeSettings() {
 	if (!QDir().exists(_basePath)) QDir().mkpath(_basePath);
 
 	// We dropped old test authorizations when migrated to multi auth.
-	//const auto name = cTestMode() ? qsl("settings_test") : qsl("settings");
+	//const auto name = cTestMode() ? u"settings_test"_q : u"settings"_q;
 	const auto name = u"settings"_q;
 	FileWriteDescriptor settings(name, _basePath);
 	if (_settingsSalt.isEmpty() || !SettingsKey) {
@@ -539,7 +534,7 @@ const QString &AutoupdatePrefix(const QString &replaceWith = {}) {
 QString autoupdatePrefixFile() {
 	Expects(!Core::UpdaterDisabled());
 
-	return cWorkingDir() + "tdata/kotatoprefix";
+	return cWorkingDir() + "tdata/prefix";
 }
 
 const QString &readAutoupdatePrefixRaw() {
@@ -556,7 +551,7 @@ const QString &readAutoupdatePrefixRaw() {
 			return AutoupdatePrefix(value);
 		}
 	}
-	return AutoupdatePrefix("https://kotatogram.github.io");
+	return AutoupdatePrefix("https://td.telegram.org");
 }
 
 void writeAutoupdatePrefix(const QString &prefix) {
@@ -803,10 +798,6 @@ void reset() {
 
 int32 oldSettingsVersion() {
 	return _oldSettingsVersion;
-}
-
-int32 oldKotatoVersion() {
-	return _oldKotatoVersion;
 }
 
 class CountWaveformTask : public Task {
@@ -1300,32 +1291,6 @@ void incrementRecentHashtag(RecentHashtagPack &recent, const QString &tag) {
 			}
 			qSwap(*i, *(i - 1));
 		}
-	}
-}
-
-qint32 readKotatoVersion() {
-	qint32 version = 0;
-	QFile f(_basePath + qsl("ktg_version"));
-	if (f.open(QIODevice::ReadOnly)) {
-		QDataStream stream(&f);
-		stream.setVersion(QDataStream::Qt_5_1);
-		while (!stream.atEnd()) {
-			stream >> version;
-			break;
-		}
-		f.close();
-	}
-
-	return version;
-}
-
-void writeKotatoVersion(int version) {
-	qint32 writtenVersion = version;
-	QFile f(_basePath + qsl("ktg_version"));
-	if (f.open(QIODevice::WriteOnly)) {
-		QDataStream stream(&f);
-		stream << writtenVersion;
-		f.close();
 	}
 }
 

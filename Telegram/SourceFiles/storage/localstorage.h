@@ -69,7 +69,6 @@ void moveLegacyBackground(
 void reset();
 
 int32 oldSettingsVersion();
-int32 oldKotatoVersion();
 
 void countVoiceWaveform(not_null<Data::DocumentMedia*> media);
 
@@ -87,9 +86,6 @@ std::vector<Lang::Language> readRecentLanguages();
 void saveRecentLanguages(const std::vector<Lang::Language> &list);
 void removeRecentLanguage(const QString &id);
 void incrementRecentHashtag(RecentHashtagPack &recent, const QString &tag);
-
-qint32 readKotatoVersion();
-void writeKotatoVersion(int version);
 
 bool readOldMtpData(
 	bool remove,

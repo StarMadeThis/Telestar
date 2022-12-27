@@ -45,6 +45,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/cached_round_corners.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 
 namespace Overview {
@@ -266,12 +267,16 @@ void RadialProgressItem::checkRadialFinished() const {
 
 RadialProgressItem::~RadialProgressItem() = default;
 
-void StatusText::update(int newSize, int fullSize, int duration, crl::time realDuration) {
+void StatusText::update(
+		int64 newSize,
+		int64 fullSize,
+		TimeId duration,
+		TimeId realDuration) {
 	setSize(newSize);
 	if (_size == Ui::FileStatusSizeReady) {
 		_text = (duration >= 0) ? Ui::FormatDurationAndSizeText(duration, fullSize) : (duration < -1 ? Ui::FormatGifAndSizeText(fullSize) : Ui::FormatSizeText(fullSize));
 	} else if (_size == Ui::FileStatusSizeLoaded) {
-		_text = (duration >= 0) ? Ui::FormatDurationText(duration) : (duration < -1 ? qsl("GIF") : Ui::FormatSizeText(fullSize));
+		_text = (duration >= 0) ? Ui::FormatDurationText(duration) : (duration < -1 ? u"GIF"_q : Ui::FormatSizeText(fullSize));
 	} else if (_size == Ui::FileStatusSizeFailed) {
 		_text = tr::lng_attach_failed(tr::now);
 	} else if (_size >= 0) {
@@ -281,7 +286,7 @@ void StatusText::update(int newSize, int fullSize, int duration, crl::time realD
 	}
 }
 
-void StatusText::setSize(int newSize) {
+void StatusText::setSize(int64 newSize) {
 	_size = newSize;
 }
 
@@ -586,7 +591,7 @@ TextState Video::getState(
 }
 
 void Video::updateStatusText() {
-	int statusSize = 0;
+	auto statusSize = int64();
 	if (_data->status == FileDownloadFailed || _data->status == FileUploadFailed) {
 		statusSize = Ui::FileStatusSizeFailed;
 	} else if (_data->uploading()) {
@@ -597,8 +602,9 @@ void Video::updateStatusText() {
 		statusSize = Ui::FileStatusSizeReady;
 	}
 	if (statusSize != _status.size()) {
-		int status = statusSize, size = _data->size;
-		if (statusSize >= 0 && statusSize < 0x7F000000) {
+		auto status = statusSize;
+		auto size = _data->size;
+		if (statusSize >= 0 && statusSize < 0xFF000000LL) {
 			size = status;
 			status = Ui::FileStatusSizeReady;
 		}
@@ -658,8 +664,8 @@ void Voice::paint(Painter &p, const QRect &clip, TextSelection selection, const 
 		}
 	}
 	const auto showPause = updateStatusText();
-	const auto nameVersion = parent()->fromOriginal()->nameVersion;
-	if (nameVersion > _nameVersion) {
+	const auto nameVersion = parent()->fromOriginal()->nameVersion();
+	if (_nameVersion < nameVersion) {
 		updateName();
 	}
 	const auto radial = isRadialAnimation();
@@ -874,18 +880,31 @@ const style::RoundCheckbox &Voice::checkboxStyle() const {
 }
 
 void Voice::updateName() {
-	auto version = 0;
 	if (const auto forwarded = parent()->Get<HistoryMessageForwarded>()) {
 		if (parent()->fromOriginal()->isChannel()) {
-			_name.setText(st::semiboldTextStyle, tr::lng_forwarded_channel(tr::now, lt_channel, parent()->fromOriginal()->name), Ui::NameTextOptions());
+			_name.setText(
+				st::semiboldTextStyle,
+				tr::lng_forwarded_channel(
+					tr::now,
+					lt_channel,
+					parent()->fromOriginal()->name()),
+				Ui::NameTextOptions());
 		} else {
-			_name.setText(st::semiboldTextStyle, tr::lng_forwarded(tr::now, lt_user, parent()->fromOriginal()->name), Ui::NameTextOptions());
+			_name.setText(
+				st::semiboldTextStyle,
+				tr::lng_forwarded(
+					tr::now,
+					lt_user,
+					parent()->fromOriginal()->name()),
+				Ui::NameTextOptions());
 		}
 	} else {
-		_name.setText(st::semiboldTextStyle, parent()->from()->name, Ui::NameTextOptions());
+		_name.setText(
+			st::semiboldTextStyle,
+			parent()->from()->name(),
+			Ui::NameTextOptions());
 	}
-	version = parent()->fromOriginal()->nameVersion;
-	_nameVersion = version;
+	_nameVersion = parent()->fromOriginal()->nameVersion();
 }
 
 int Voice::duration() const {
@@ -893,8 +912,9 @@ int Voice::duration() const {
 }
 
 bool Voice::updateStatusText() {
-	bool showPause = false;
-	int32 statusSize = 0, realDuration = 0;
+	auto showPause = false;
+	auto statusSize = int64();
+	auto realDuration = TimeId();
 	if (_data->status == FileDownloadFailed || _data->status == FileUploadFailed) {
 		statusSize = Ui::FileStatusSizeFailed;
 	} else if (dataLoaded()) {
@@ -920,11 +940,11 @@ bool Voice::updateStatusText() {
 Document::Document(
 	not_null<Delegate*> delegate,
 	not_null<HistoryItem*> parent,
-	not_null<DocumentData*> document,
+	DocumentFields fields,
 	const style::OverviewFileLayout &st)
 : RadialProgressItem(delegate, parent)
-, _data(document)
-, _msgl(goToMessageClickHandler(parent))
+, _data(fields.document)
+, _msgl(parent->isHistoryEntry() ? goToMessageClickHandler(parent) : nullptr)
 , _namel(std::make_shared<DocumentOpenClickHandler>(
 	_data,
 	crl::guard(this, [=](FullMsgId id) {
@@ -933,19 +953,28 @@ Document::Document(
 	parent->fullId()))
 , _st(st)
 , _generic(::Layout::DocumentGenericPreview::Create(_data))
-, _date(langDateTime(base::unixtime::parse(_data->date)))
+, _forceFileLayout(fields.forceFileLayout)
+, _date(langDateTime(base::unixtime::parse(fields.dateOverride
+	? fields.dateOverride
+	: _data->date)))
 , _ext(_generic.ext)
 , _datew(st::normalFont->width(_date)) {
 	_name.setMarkedText(
 		st::defaultTextStyle,
-		Ui::Text::FormatSongNameFor(_data).textWithEntities(),
+		(!_forceFileLayout
+			? Ui::Text::FormatSongNameFor(_data).textWithEntities()
+			: Ui::Text::FormatDownloadsName(_data)),
 		_documentNameOptions);
 
 	AddComponents(Info::Bit());
 
 	setDocumentLinks(_data);
 
-	_status.update(Ui::FileStatusSizeReady, _data->size, _data->isSong() ? _data->song()->duration : -1, 0);
+	_status.update(
+		Ui::FileStatusSizeReady,
+		_data->size,
+		songLayout() ? _data->song()->duration : -1,
+		0);
 
 	if (withThumb()) {
 		_data->loadThumbnail(parent->fullId());
@@ -976,7 +1005,7 @@ bool Document::downloadInCorner() const {
 
 void Document::initDimensions() {
 	_maxw = _st.maxWidth;
-	if (_data->isSong()) {
+	if (songLayout()) {
 		_minh = _st.songPadding.top() + _st.songThumbSize + _st.songPadding.bottom();
 	} else {
 		_minh = _st.filePadding.top() + _st.fileThumbSize + _st.filePadding.bottom() + st::lineWidth;
@@ -1006,7 +1035,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 	int32 nameleft = 0, nametop = 0, nameright = 0, statustop = 0, datetop = -1;
 	const auto wthumb = withThumb();
 
-	const auto isSong = _data->isSong();
+	const auto isSong = songLayout();
 	if (isSong) {
 		nameleft = _st.songPadding.left() + _st.songThumbSize + _st.songPadding.right();
 		nameright = _st.songPadding.left();
@@ -1090,7 +1119,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 		datetop = st::linksBorder + _st.fileDateTop;
 
 		QRect border(style::rtlrect(nameleft, 0, _width - nameleft, st::linksBorder, _width));
-		if (!context->isAfterDate && clip.intersects(border)) {
+		if (!context->skipBorder && clip.intersects(border)) {
 			p.fillRect(clip.intersected(border), st::linksBorderFg);
 		}
 
@@ -1103,9 +1132,10 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 				if (thumbnail || blurred) {
 					if (_thumb.isNull() || (thumbnail && !_thumbLoaded)) {
 						_thumbLoaded = (thumbnail != nullptr);
-						const auto options = _thumbLoaded
-							? Images::Option()
-							: Images::Option::Blur;
+						const auto options = Images::Option::RoundSmall
+							| (_thumbLoaded
+								? Images::Option()
+								: Images::Option::Blur);
 						const auto image = thumbnail ? thumbnail : blurred;
 						_thumb = image->pixNoCache(
 							_thumbw * style::DevicePixelRatio(),
@@ -1118,10 +1148,20 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 					}
 					p.drawPixmap(rthumb.topLeft(), _thumb);
 				} else {
-					p.fillRect(rthumb, st::overviewFileThumbBg);
+					p.setPen(Qt::NoPen);
+					p.setBrush(st::overviewFileThumbBg);
+					p.drawRoundedRect(
+						rthumb,
+						st::roundRadiusSmall,
+						st::roundRadiusSmall);
 				}
 			} else {
-				p.fillRect(rthumb, _generic.color);
+				p.setPen(Qt::NoPen);
+				p.setBrush(_generic.color);
+				p.drawRoundedRect(
+					rthumb,
+					st::roundRadiusSmall,
+					st::roundRadiusSmall);
 				if (!radial && loaded && !_ext.isEmpty()) {
 					p.setFont(st::overviewFileExtFont);
 					p.setPen(st::overviewFileExtFg);
@@ -1129,7 +1169,12 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 				}
 			}
 			if (selected) {
-				p.fillRect(rthumb, st::defaultTextPalette.selectOverlay);
+				p.setPen(Qt::NoPen);
+				p.setBrush(st::defaultTextPalette.selectOverlay);
+				p.drawRoundedRect(
+					rthumb,
+					st::roundRadiusSmall,
+					st::roundRadiusSmall);
 			}
 
 			if (radial || (!loaded && !_data->loading())) {
@@ -1187,7 +1232,9 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 		p.drawTextLeft(nameleft, statustop, _width, _status.text());
 	}
 	if (datetop >= 0 && clip.intersects(style::rtlrect(nameleft, datetop, _datew, st::normalFont->height, _width))) {
-		p.setFont(ClickHandler::showAsActive(_msgl) ? st::normalFont->underline() : st::normalFont);
+		p.setFont((_msgl && ClickHandler::showAsActive(_msgl))
+			? st::normalFont->underline()
+			: st::normalFont);
 		p.setPen(st::mediaInFg);
 		p.drawTextLeft(nameleft, datetop, _width, _date, _datew);
 	}
@@ -1204,7 +1251,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 	paintCheckbox(p, { checkLeft, checkTop }, selected, context);
 }
 
-void Document::drawCornerDownload(Painter &p, bool selected, const PaintContext *context) const {
+void Document::drawCornerDownload(QPainter &p, bool selected, const PaintContext *context) const {
 	if (dataLoaded()
 		|| _data->loadedInMediaCache()
 		|| !downloadInCorner()) {
@@ -1264,7 +1311,7 @@ TextState Document::getState(
 	ensureDataMediaCreated();
 	const auto loaded = dataLoaded();
 
-	if (_data->isSong()) {
+	if (songLayout()) {
 		const auto nameleft = _st.songPadding.left() + _st.songThumbSize + _st.songPadding.right();
 		const auto nameright = _st.songPadding.left();
 		const auto namewidth = std::min(
@@ -1364,6 +1411,10 @@ const style::RoundCheckbox &Document::checkboxStyle() const {
 	return st::overviewSmallCheck;
 }
 
+bool Document::songLayout() const {
+	return !_forceFileLayout && _data->isSong();
+}
+
 void Document::ensureDataMediaCreated() const {
 	if (_dataMedia) {
 		return;
@@ -1392,20 +1443,21 @@ bool Document::dataLoaded() const {
 }
 
 bool Document::iconAnimated() const {
-	return _data->isSong()
+	return songLayout()
 		|| !dataLoaded()
 		|| (_radial && _radial->animating());
 }
 
 bool Document::withThumb() const {
-	return !_data->isSong()
+	return !songLayout()
 		&& _data->hasThumbnail()
 		&& !Data::IsExecutableName(_data->filename());
 }
 
 bool Document::updateStatusText() {
-	bool showPause = false;
-	int32 statusSize = 0, realDuration = 0;
+	auto showPause = false;
+	auto statusSize = int64();
+	auto realDuration = TimeId();
 	if (_data->status == FileDownloadFailed
 		|| _data->status == FileUploadFailed) {
 		statusSize = Ui::FileStatusSizeFailed;
@@ -1419,7 +1471,8 @@ bool Document::updateStatusText() {
 		statusSize = Ui::FileStatusSizeReady;
 	}
 
-	if (_data->isSong()) {
+	const auto isSong = songLayout();
+	if (isSong) {
 		const auto state = Media::Player::instance()->getState(AudioMsgId::Type::Song);
 		if (state.id == AudioMsgId(_data, parent()->fullId(), state.id.externalPlayId()) && !Media::Player::IsStoppedOrStopping(state.state)) {
 			statusSize = -1 - (state.position / state.frequency);
@@ -1432,7 +1485,11 @@ bool Document::updateStatusText() {
 	}
 
 	if (statusSize != _status.size()) {
-		_status.update(statusSize, _data->size, _data->isSong() ? _data->song()->duration : -1, realDuration);
+		_status.update(
+			statusSize,
+			_data->size,
+			isSong ? _data->song()->duration : -1,
+			realDuration);
 	}
 	return showPause;
 }
@@ -1441,7 +1498,8 @@ Link::Link(
 	not_null<Delegate*> delegate,
 	not_null<HistoryItem*> parent,
 	Data::Media *media)
-: ItemBase(delegate, parent) {
+: ItemBase(delegate, parent)
+, _text(st::msgMinWidth) {
 	AddComponents(Info::Bit());
 
 	auto textWithEntities = parent->originalText();
@@ -1473,7 +1531,7 @@ Link::Link(
 		}
 		int32 afterLinkStart = entity.offset() + entity.length();
 		if (till > afterLinkStart) {
-			if (!QRegularExpression(qsl("^[,.\\s_=+\\-;:`'\"\\(\\)\\[\\]\\{\\}<>*&^%\\$#@!\\\\/]+$")).match(text.mid(afterLinkStart, till - afterLinkStart)).hasMatch()) {
+			if (!QRegularExpression(u"^[,.\\s_=+\\-;:`'\"\\(\\)\\[\\]\\{\\}<>*&^%\\$#@!\\\\/]+$"_q).match(text.mid(afterLinkStart, till - afterLinkStart)).hasMatch()) {
 				++lnk;
 				break;
 			}
@@ -1481,7 +1539,7 @@ Link::Link(
 		till = entity.offset();
 	}
 	if (!lnk) {
-		if (QRegularExpression(qsl("^[,.\\s\\-;:`'\"\\(\\)\\[\\]\\{\\}<>*&^%\\$#@!\\\\/]+$")).match(text.mid(from, till - from)).hasMatch()) {
+		if (QRegularExpression(u"^[,.\\s\\-;:`'\"\\(\\)\\[\\]\\{\\}<>*&^%\\$#@!\\\\/]+$"_q).match(text.mid(from, till - from)).hasMatch()) {
 			till = from;
 		}
 	}
@@ -1489,7 +1547,7 @@ Link::Link(
 	const auto createHandler = [](const QString &url) {
 		return UrlClickHandler::IsSuspicious(url)
 			? std::make_shared<HiddenUrlClickHandler>(url)
-			: std::make_shared<UrlClickHandler>(url);
+			: std::make_shared<UrlClickHandler>(url, false);
 	};
 	_page = media ? media->webpage() : nullptr;
 	if (_page) {
@@ -1505,8 +1563,8 @@ Link::Link(
 			if (_page->type == WebPageType::Profile || _page->type == WebPageType::Video) {
 				_photol = createHandler(_page->url);
 			} else if (_page->type == WebPageType::Photo
-				|| _page->siteName == qstr("Twitter")
-				|| _page->siteName == qstr("Facebook")) {
+				|| _page->siteName == u"Twitter"_q
+				|| _page->siteName == u"Facebook"_q) {
 				_photol = std::make_shared<PhotoOpenClickHandler>(
 					_page->photo,
 					crl::guard(this, [=](FullMsgId id) {
@@ -1661,7 +1719,7 @@ void Link::paint(Painter &p, const QRect &clip, TextSelection selection, const P
 	}
 
 	QRect border(style::rtlrect(left, 0, w, st::linksBorder, _width));
-	if (!context->isAfterDate && clip.intersects(border)) {
+	if (!context->skipBorder && clip.intersects(border)) {
 		p.fillRect(clip.intersected(border), st::linksBorderFg);
 	}
 
@@ -1947,7 +2005,7 @@ void Gif::validateThumbnail(
 		{
 			.options = (good ? Images::Option() : Images::Option::Blur),
 			.outer = size,
-		});
+		}).toImage();
 }
 
 void Gif::prepareThumbnail(QSize size, QSize frame) {
@@ -2004,13 +2062,13 @@ void Gif::paint(
 			_thumb = pixmap;
 			_thumbGood = true;
 		}
-		p.drawPixmap(r.topLeft(), pixmap);
+		p.drawImage(r.topLeft(), pixmap);
 	} else {
 		prepareThumbnail(r.size(), frame);
 		if (_thumb.isNull()) {
 			p.fillRect(r, st::overviewPhotoBg);
 		} else {
-			p.drawPixmap(r.topLeft(), _thumb);
+			p.drawImage(r.topLeft(), _thumb);
 		}
 	}
 
@@ -2118,7 +2176,7 @@ TextState Gif::getState(
 }
 
 void Gif::updateStatusText() {
-	int statusSize = 0;
+	auto statusSize = int64();
 	if (_data->status == FileDownloadFailed || _data->status == FileUploadFailed) {
 		statusSize = Ui::FileStatusSizeFailed;
 	} else if (_data->uploading()) {
@@ -2129,8 +2187,9 @@ void Gif::updateStatusText() {
 		statusSize = Ui::FileStatusSizeReady;
 	}
 	if (statusSize != _status.size()) {
-		int status = statusSize, size = _data->size;
-		if (statusSize >= 0 && statusSize < 0x7F000000) {
+		auto status = statusSize;
+		auto size = _data->size;
+		if (statusSize >= 0 && statusSize < 0xFF000000LL) {
 			size = status;
 			status = Ui::FileStatusSizeReady;
 		}

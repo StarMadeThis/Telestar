@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "storage/cache/storage_cache_types.h"
 #include "base/qt/qt_common_adapters.h"
+#include "base/timer.h"
 #include "base/weak_ptr.h"
 
 #include <QtNetwork/QAuthenticator>
@@ -488,7 +489,7 @@ void webFileLoader::startLoading() {
 	_manager->enqueue(this);
 }
 
-int webFileLoader::currentOffset() const {
+int64 webFileLoader::currentOffset() const {
 	return _ready;
 }
 

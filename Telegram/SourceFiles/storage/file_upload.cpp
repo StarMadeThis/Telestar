@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/file_upload.h"
 
-#include "kotato/kotato_settings.h"
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
 #include "storage/localimageloader.h"
@@ -30,7 +29,7 @@ namespace {
 // max 512kb uploaded at the same time in each session
 constexpr auto kMaxUploadFileParallelSize = MTP::kUploadSessionsCount * 512 * 1024;
 
-constexpr auto kDocumentMaxPartsCount = 4000;
+constexpr auto kDocumentMaxPartsCountDefault = 4000;
 
 // 32kb for tiny document ( < 1mb )
 constexpr auto kDocumentUploadPartSize0 = 32 * 1024;
@@ -57,29 +56,19 @@ constexpr auto kKillSessionTimeout = 15 * crl::time(000);
 	return Core::IsMimeSticker(mime) ? "WEBP" : "JPG";
 }
 
-int UploadSessionsCount() {
-	static const auto count = 2 + (2 * ::Kotato::JsonSettings::GetInt("net_speed_boost"));
-	return count;
-}
-
-int UploadSessionsInterval() {
-	static const auto interval = 500 - (100 * ::Kotato::JsonSettings::GetInt("net_speed_boost"));
-	return interval;
-}
-
 } // namespace
 
 struct Uploader::File {
 	File(const SendMediaReady &media);
 	File(const std::shared_ptr<FileLoadResult> &file);
 
-	void setDocSize(int32 size);
+	void setDocSize(int64 size);
 	bool setPartSize(uint32 partSize);
 
 	std::shared_ptr<FileLoadResult> file;
 	SendMediaReady media;
 	int32 partsCount = 0;
-	mutable int32 fileSentSize = 0;
+	mutable int64 fileSentSize = 0;
 
 	uint64 id() const;
 	SendMediaType type() const;
@@ -89,10 +78,10 @@ struct Uploader::File {
 	HashMd5 md5Hash;
 
 	std::unique_ptr<QFile> docFile;
-	int32 docSentParts = 0;
-	int32 docSize = 0;
-	int32 docPartSize = 0;
-	int32 docPartsCount = 0;
+	int64 docSize = 0;
+	int64 docPartSize = 0;
+	int docSentParts = 0;
+	int docPartsCount = 0;
 
 };
 
@@ -123,7 +112,7 @@ Uploader::File::File(const std::shared_ptr<FileLoadResult> &file)
 	}
 }
 
-void Uploader::File::setDocSize(int32 size) {
+void Uploader::File::setDocSize(int64 size) {
 	docSize = size;
 	constexpr auto limit0 = 1024 * 1024;
 	constexpr auto limit1 = 32 * limit0;
@@ -131,9 +120,7 @@ void Uploader::File::setDocSize(int32 size) {
 		if (docSize > limit1 || !setPartSize(kDocumentUploadPartSize1)) {
 			if (!setPartSize(kDocumentUploadPartSize2)) {
 				if (!setPartSize(kDocumentUploadPartSize3)) {
-					if (!setPartSize(kDocumentUploadPartSize4)) {
-						LOG(("Upload Error: bad doc size: %1").arg(docSize));
-					}
+					setPartSize(kDocumentUploadPartSize4);
 				}
 			}
 		}
@@ -144,7 +131,7 @@ bool Uploader::File::setPartSize(uint32 partSize) {
 	docPartSize = partSize;
 	docPartsCount = (docSize / docPartSize)
 		+ ((docSize % docPartSize) ? 1 : 0);
-	return (docPartsCount <= kDocumentMaxPartsCount);
+	return (docPartsCount <= kDocumentMaxPartsCountDefault);
 }
 
 uint64 Uploader::File::id() const {
@@ -237,7 +224,8 @@ void Uploader::processDocumentProgress(const FullMsgId &newId) {
 			? Api::SendProgressType::UploadVoice
 			: Api::SendProgressType::UploadFile;
 		const auto progress = (document && document->uploading())
-			? document->uploadingData->offset
+			? ((document->uploadingData->offset * 100)
+				/ document->uploadingData->size)
 			: 0;
 		sendProgressUpdate(item, sendAction, progress);
 	}
@@ -273,6 +261,8 @@ void Uploader::sendProgressUpdate(
 		if (history->peer->isMegagroup()) {
 			manager.update(history, replyTo, type, progress);
 		}
+	} else if (history->isForum()) {
+		manager.update(history, item->topicRootId(), type, progress);
 	}
 	_api->session().data().requestItemRepaint(item);
 }
@@ -378,7 +368,7 @@ void Uploader::currentFailed() {
 	dcMap.clear();
 	uploadingId = FullMsgId();
 	sentSize = 0;
-	for (int i = 0; i < UploadSessionsCount(); ++i) {
+	for (int i = 0; i < MTP::kUploadSessionsCount; ++i) {
 		sentSizes[i] = 0;
 	}
 
@@ -405,13 +395,13 @@ void Uploader::notifyFailed(FullMsgId id, const File &file) {
 }
 
 void Uploader::stopSessions() {
-	for (int i = 0; i < UploadSessionsCount(); ++i) {
+	for (int i = 0; i < MTP::kUploadSessionsCount; ++i) {
 		_api->instance().stopSession(MTP::uploadDcId(i));
 	}
 }
 
 void Uploader::sendNext() {
-	if (sentSize >= (UploadSessionsCount() * 512 * 1024) || _pausedId.msg) {
+	if (sentSize >= kMaxUploadFileParallelSize || _pausedId.msg) {
 		return;
 	}
 
@@ -436,7 +426,7 @@ void Uploader::sendNext() {
 	auto &uploadingData = i->second;
 
 	auto todc = 0;
-	for (auto dc = 1; dc != UploadSessionsCount(); ++dc) {
+	for (auto dc = 1; dc != MTP::kUploadSessionsCount; ++dc) {
 		if (sentSizes[dc] < sentSizes[todc]) {
 			todc = dc;
 		}
@@ -467,11 +457,11 @@ void Uploader::sendNext() {
 					: std::vector<MTPInputDocument>();
 				if (uploadingData.type() == SendMediaType::Photo) {
 					auto photoFilename = uploadingData.filename();
-					if (!photoFilename.endsWith(qstr(".jpg"), Qt::CaseInsensitive)) {
+					if (!photoFilename.endsWith(u".jpg"_q, Qt::CaseInsensitive)) {
 						// Server has some extensions checking for inputMediaUploadedPhoto,
 						// so force the extension to be .jpg anyway. It doesn't matter,
 						// because the filename from inputFile is not used anywhere.
-						photoFilename += qstr(".jpg");
+						photoFilename += u".jpg"_q;
 					}
 					const auto md5 = uploadingData.file
 						? uploadingData.file->filemd5
@@ -512,7 +502,7 @@ void Uploader::sendNext() {
 						}
 						const auto thumbFilename = uploadingData.file
 							? uploadingData.file->thumbname
-							: (qsl("thumb.") + uploadingData.media.thumbExt);
+							: (u"thumb."_q + uploadingData.media.thumbExt);
 						const auto thumbMd5 = uploadingData.file
 							? uploadingData.file->thumbmd5
 							: uploadingData.media.jpeg_md5;
@@ -629,7 +619,7 @@ void Uploader::sendNext() {
 
 		parts.erase(part);
 	}
-	_nextTimer.callOnce(crl::time(UploadSessionsInterval()));
+	_nextTimer.callOnce(kUploadRequestInterval);
 }
 
 void Uploader::cancel(const FullMsgId &msgId) {
@@ -686,7 +676,7 @@ void Uploader::clear() {
 	cancelRequests();
 	dcMap.clear();
 	sentSize = 0;
-	for (int i = 0; i < UploadSessionsCount(); ++i) {
+	for (int i = 0; i < MTP::kUploadSessionsCount; ++i) {
 		_api->instance().stopSession(MTP::uploadDcId(i));
 		sentSizes[i] = 0;
 	}
@@ -712,7 +702,7 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 			auto dc = dcIt->second;
 			dcMap.erase(dcIt);
 
-			int32 sentPartSize = 0;
+			int64 sentPartSize = 0;
 			auto k = queue.find(uploadingId);
 			Assert(k != queue.cend());
 			auto &[fullId, file] = *k;
