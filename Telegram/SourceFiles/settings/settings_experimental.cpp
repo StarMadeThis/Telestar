@@ -7,41 +7,31 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_experimental.h"
 
-#include "kotato/kotato_lang.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/gl/gl_detection.h"
+#include "ui/chat/chat_style_radius.h"
 #include "base/options.h"
 #include "core/application.h"
+#include "platform/platform_specific.h"
 #include "chat_helpers/tabbed_panel.h"
+#include "dialogs/dialogs_inner_widget.h"
+#include "history/history_widget.h"
 #include "lang/lang_keys.h"
+#include "media/player/media_player_instance.h"
+#include "webview/webview_embed.h"
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
+#include "settings/settings_common.h"
 #include "styles/style_settings.h"
 #include "styles/style_layers.h"
 
 namespace Settings {
 namespace {
-
-// format: { key, { name, description }}
-const std::map<QString, std::pair<QString, QString>> TranslationMap {
-	{ ChatHelpers::kOptionTabbedPanelShowOnClick, {
-		"ktg_experimental_tabbed_panel_by_click",
-		"ktg_experimental_tabbed_panel_by_click_description",
-	}},
-	{ Window::kOptionViewProfileInChatsListContextMenu, {
-		"ktg_experimental_view_profile_context_menu",
-		"ktg_experimental_view_profile_context_menu_description",
-	}},
-	{ Ui::GL::kOptionAllowLinuxNvidiaOpenGL, {
-		"ktg_experimental_linux_nvidia_opengl",
-		"ktg_experimental_linux_nvidia_opengl_description",
-	}},
-};
 
 void AddOption(
 		not_null<Window::Controller*> window,
@@ -49,12 +39,7 @@ void AddOption(
 		base::options::option<bool> &option,
 		rpl::producer<> resetClicks) {
 	auto &lifetime = container->lifetime();
-	const auto translation = TranslationMap.find(option.id());
-	const auto name = translation != TranslationMap.end()
-			? ktr(translation->second.first)
-			: option.name().isEmpty()
-			? option.id()
-			: option.name();
+	const auto name = option.name().isEmpty() ? option.id() : option.name();
 	const auto toggles = lifetime.make_state<rpl::event_stream<bool>>();
 	std::move(
 		resetClicks
@@ -65,7 +50,9 @@ void AddOption(
 	const auto button = AddButton(
 		container,
 		rpl::single(name),
-		option.relevant() ? st::settingsButton : st::settingsOptionDisabled
+		(option.relevant()
+			? st::settingsButtonNoIcon
+			: st::settingsOptionDisabled)
 	)->toggleOn(toggles->events_starting_with(option.value()));
 
 	const auto restarter = (option.relevant() && option.restartRequired())
@@ -73,11 +60,12 @@ void AddOption(
 		: nullptr;
 	if (restarter) {
 		restarter->setCallback([=] {
-			window->show(Box<Ui::ConfirmBox>(
-				tr::lng_settings_need_restart(tr::now),
-				tr::lng_settings_restart_now(tr::now),
-				tr::lng_settings_restart_later(tr::now),
-				[] { Core::Restart(); }));
+			window->show(Ui::MakeConfirmBox({
+				.text = tr::lng_settings_need_restart(),
+				.confirmed = [] { Core::Restart(); },
+				.confirmText = tr::lng_settings_restart_now(),
+				.cancelText = tr::lng_settings_restart_later(),
+			}));
 		});
 	}
 	button->toggledChanges(
@@ -90,14 +78,11 @@ void AddOption(
 		}
 		option.set(toggled);
 		if (restarter) {
-			restarter->callOnce(st::settingsButton.toggle.duration);
+			restarter->callOnce(st::settingsButtonNoIcon.toggle.duration);
 		}
 	}, container->lifetime());
 
-	const auto &description = (translation != TranslationMap.end()
-		&& !translation->second.second.isEmpty())
-			? ktr(translation->second.second)
-			: option.description();
+	const auto &description = option.description();
 	if (!description.isEmpty()) {
 		AddSkip(container, st::settingsCheckboxesSkip);
 		AddDividerText(container, rpl::single(description));
@@ -129,7 +114,7 @@ void SetupExperimental(
 		reset = AddButton(
 			inner,
 			tr::lng_settings_experimental_restore(),
-			st::settingsButton);
+			st::settingsButtonNoIcon);
 		reset->addClickHandler([=] {
 			base::options::reset();
 			wrap->hide(anim::type::normal);
@@ -152,7 +137,15 @@ void SetupExperimental(
 
 	addToggle(ChatHelpers::kOptionTabbedPanelShowOnClick);
 	addToggle(Window::kOptionViewProfileInChatsListContextMenu);
+	addToggle(Dialogs::kOptionCtrlClickChatNewWindow);
+	addToggle(Window::kOptionShowChatNameInNewWindow);
 	addToggle(Ui::GL::kOptionAllowLinuxNvidiaOpenGL);
+	addToggle(Ui::kOptionUseSmallMsgBubbleRadius);
+	addToggle(Media::Player::kOptionDisableAutoplayNext);
+	addToggle(Settings::kOptionMonoSettingsIcons);
+	addToggle(Webview::kOptionWebviewDebugEnabled);
+	addToggle(kOptionAutoScrollInactiveChat);
+	addToggle(Platform::kOptionGApplication);
 }
 
 } // namespace
@@ -162,6 +155,10 @@ Experimental::Experimental(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+}
+
+rpl::producer<QString> Experimental::title() {
+	return tr::lng_settings_experimental();
 }
 
 void Experimental::setupContent(

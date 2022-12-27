@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/timer.h"
-#include "base/build_config.h"
 
 namespace Storage {
 class Domain;
@@ -31,12 +30,8 @@ public:
 		std::unique_ptr<Account> account;
 	};
 
-	static constexpr auto kMaxAccountsWarn = 3;
-#ifdef ARCH_CPU_64_BITS
-	static constexpr auto kMaxAccounts = 100;
-#else
-	static constexpr auto kMaxAccounts = 10;
-#endif
+	static constexpr auto kMaxAccounts = 3;
+	static constexpr auto kPremiumMaxAccounts = 6;
 
 	explicit Domain(const QString &dataName);
 	~Domain();
@@ -46,12 +41,16 @@ public:
 	void resetWithForgottenPasscode();
 	void finish();
 
+	[[nodiscard]] int maxAccounts() const;
+	[[nodiscard]] rpl::producer<int> maxAccountsChanges() const;
+
 	[[nodiscard]] Storage::Domain &local() const {
 		return *_local;
 	}
 
 	[[nodiscard]] auto accounts() const
 		-> const std::vector<AccountWithIndex> &;
+	[[nodiscard]] std::vector<not_null<Account*>> orderedAccounts() const;
 	[[nodiscard]] rpl::producer<Account*> activeValue() const;
 	[[nodiscard]] rpl::producer<> accountsChanges() const;
 	[[nodiscard]] Account *maybeLastOrSomeAuthedAccount();
@@ -106,6 +105,8 @@ private:
 	int _unreadBadge = 0;
 	bool _unreadBadgeMuted = true;
 	bool _unreadBadgeUpdateScheduled = false;
+
+	rpl::variable<int> _lastMaxAccounts;
 
 	rpl::lifetime _activeLifetime;
 	rpl::lifetime _lifetime;

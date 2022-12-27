@@ -114,16 +114,6 @@ public:
 		return _lifetime;
 	}
 
-	[[nodiscard]] int defaultFilterId() {
-		return _defaultFilterId;
-	}
-	void setDefaultFilterId(uint64 id);
-
-	[[nodiscard]] bool isCurrent(uint64 id, bool testMode);
-
-	void addToRecent(PeerId id);
-	[[nodiscard]] bool isRecent(PeerId id);
-
 private:
 	static constexpr auto kDefaultSaveDelay = crl::time(1000);
 	enum class DestroyReason {
@@ -169,9 +159,6 @@ private:
 	MTP::Instance::Fields _mtpFields;
 	MTP::AuthKeysList _mtpKeysToDestroy;
 	bool _loggingOut = false;
-	int _defaultFilterId = 0;
-
-	QSet<uint64> _recent;
 
 	rpl::lifetime _lifetime;
 

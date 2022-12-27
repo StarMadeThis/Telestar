@@ -7,9 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_advanced.h"
 
-#include "kotato/kotato_lang.h"
 #include "settings/settings_common.h"
 #include "settings/settings_chat.h"
+#include "settings/settings_experimental.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/widgets/labels.h"
@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "core/update_checker.h"
 #include "core/application.h"
+#include "tray.h"
 #include "storage/localstorage.h"
 #include "storage/storage_domain.h"
 #include "data/data_session.h"
@@ -75,7 +76,8 @@ void SetupConnectionType(
 			// Handle language switch.
 			tr::lng_connection_auto_connecting() | rpl::to_empty
 		) | rpl::map(connectionType),
-		st::settingsButton);
+		st::settingsButton,
+		{ &st::settingsIconArrows, kIconGreen });
 	button->addClickHandler([=] {
 		controller->show(ProxiesBoxController::CreateOwningBox(account));
 	});
@@ -86,9 +88,12 @@ bool HasUpdate() {
 }
 
 void SetupUpdate(
-		not_null<Window::Controller*> controller,
 		not_null<Ui::VerticalLayout*> container,
 		Fn<void(Type)> showOther) {
+	if (!HasUpdate()) {
+		return;
+	}
+
 	const auto texts = Ui::CreateChild<rpl::event_stream<QString>>(
 		container.get());
 	const auto downloading = Ui::CreateChild<rpl::event_stream<bool>>(
@@ -111,21 +116,42 @@ void SetupUpdate(
 			container,
 			object_ptr<Ui::VerticalLayout>(container)));
 	const auto inner = options->entity();
-	const auto install = (cAlphaVersion() || !HasUpdate()) ? nullptr : AddButton(
+	const auto install = cAlphaVersion() ? nullptr : AddButton(
 		inner,
 		tr::lng_settings_install_beta(),
-		st::settingsButton).get();
+		st::settingsButtonNoIcon).get();
 
 	if (showOther) {
-		const auto experimental = container->add(
-				object_ptr<Button>(
-					container,
+		const auto experimental = inner->add(
+			object_ptr<Ui::SlideWrap<Button>>(
+				inner,
+				CreateButton(
+					inner,
 					tr::lng_settings_experimental(),
-					st::settingsButton));
-		experimental->setClickedCallback([=] {
-			showOther(Type::Experimental);
+					st::settingsButtonNoIcon)));
+		if (!install) {
+			experimental->toggle(true, anim::type::instant);
+		} else {
+			experimental->toggleOn(install->toggledValue());
+		}
+		experimental->entity()->setClickedCallback([=] {
+			showOther(Experimental::Id());
 		});
 	}
+
+	const auto check = AddButton(
+		inner,
+		tr::lng_settings_check_now(),
+		st::settingsButtonNoIcon);
+	const auto update = Ui::CreateChild<Button>(
+		check.get(),
+		tr::lng_update_telegram() | Ui::Text::ToUpper(),
+		st::settingsUpdate);
+	update->hide();
+	check->widthValue() | rpl::start_with_next([=](int width) {
+		update->resizeToWidth(width);
+		update->moveToLeft(0, 0);
+	}, update->lifetime());
 
 	rpl::combine(
 		toggle->widthValue(),
@@ -136,36 +162,6 @@ void SetupUpdate(
 			st::settingsUpdateStatePosition.y());
 	}, label->lifetime());
 	label->setAttribute(Qt::WA_TransparentForMouseEvents);
-
-	if (!HasUpdate()) {
-		texts->fire_copy(version);
-		auto &lifetime = container->lifetime();
-		const auto toggles = lifetime.make_state<rpl::event_stream<bool>>();
-		toggle->toggleOn(toggles->events_starting_with(false));
-		toggle->toggledChanges(
-		) | rpl::start_with_next([=](bool value) {
-			if (value) {
-				toggles->fire_copy(false);
-				controller->showToast(ktr("ktg_in_app_update_disabled"));
-				return;
-			}
-		}, container->lifetime());
-		return;
-	}
-
-	const auto check = AddButton(
-		inner,
-		tr::lng_settings_check_now(),
-		st::settingsButton);
-	const auto update = Ui::CreateChild<Button>(
-		check.get(),
-		rktr("ktg_update_telegram") | Ui::Text::ToUpper(),
-		st::settingsUpdate);
-	update->hide();
-	check->widthValue() | rpl::start_with_next([=](int width) {
-		update->resizeToWidth(width);
-		update->moveToLeft(0, 0);
-	}, update->lifetime());
 
 	const auto showDownloadProgress = [=](int64 ready, int64 total) {
 		texts->fire(tr::lng_settings_downloading_update(
@@ -296,7 +292,7 @@ void SetupSpellchecker(
 		isSystem
 			? tr::lng_settings_system_spellchecker()
 			: tr::lng_settings_custom_spellchecker(),
-		st::settingsButton
+		st::settingsButtonNoIcon
 	)->toggleOn(
 		rpl::single(settings->spellcheckerEnabled())
 	);
@@ -321,7 +317,7 @@ void SetupSpellchecker(
 	AddButton(
 		sliding->entity(),
 		tr::lng_settings_auto_download_dictionaries(),
-		st::settingsButton
+		st::settingsButtonNoIcon
 	)->toggleOn(
 		rpl::single(settings->autoDownloadDictionaries())
 	)->toggledValue(
@@ -336,9 +332,10 @@ void SetupSpellchecker(
 		sliding->entity(),
 		tr::lng_settings_manage_dictionaries(),
 		Spellchecker::ButtonManageDictsState(session),
-		st::settingsButton
+		st::settingsButtonNoIcon
 	)->addClickHandler([=] {
-		controller->show(Box<Ui::ManageDictionariesBox>(controller));
+		controller->show(
+			Box<Ui::ManageDictionariesBox>(&controller->session()));
 	});
 
 	button->toggledValue(
@@ -459,8 +456,7 @@ void SetupSystemIntegrationContent(
 	const auto closeToTaskbarShown = std::make_shared<rpl::variable<bool>>(false);
 	Core::App().settings().workModeValue(
 	) | rpl::start_with_next([=](WorkMode workMode) {
-		*closeToTaskbarShown = (workMode == WorkMode::WindowOnly)
-			|| !Platform::TrayIconSupported();
+		*closeToTaskbarShown = !Core::App().tray().has();
 	}, closeToTaskbar->lifetime());
 
 	closeToTaskbar->toggleOn(closeToTaskbarShown->value());
@@ -494,7 +490,7 @@ void SetupSystemIntegrationContent(
 		};
 
 		const auto autostart = addCheckbox(
-			rktr("ktg_settings_auto_start"),
+			tr::lng_settings_auto_start(),
 			cAutoStart());
 		const auto minimized = addSlidingCheckbox(
 			tr::lng_settings_start_min(),
@@ -527,8 +523,8 @@ void SetupSystemIntegrationContent(
 		}) | rpl::start_with_next([=](bool checked) {
 			if (controller->session().domain().local().hasLocalPasscode()) {
 				minimized->entity()->setChecked(false);
-				controller->show(Box<Ui::InformBox>(
-					ktr("ktg_error_start_minimized_passcoded")));
+				controller->show(Ui::MakeInformBox(
+					tr::lng_error_start_minimized_passcoded()));
 			} else {
 				cSetStartMinimized(checked);
 				Local::writeSettings();
@@ -543,7 +539,7 @@ void SetupSystemIntegrationContent(
 
 	if (Platform::IsWindows() && !Platform::IsWindowsStoreBuild()) {
 		const auto sendto = addCheckbox(
-			rktr("ktg_settings_add_sendto"),
+			tr::lng_settings_add_sendto(),
 			cSendToMenu());
 
 		sendto->checkedChanges(
@@ -575,7 +571,7 @@ void SetupAnimations(not_null<Ui::VerticalLayout*> container) {
 	AddButton(
 		container,
 		tr::lng_settings_enable_animations(),
-		st::settingsButton
+		st::settingsButtonNoIcon
 	)->toggleOn(
 		rpl::single(!anim::Disabled())
 	)->toggledValue(
@@ -584,6 +580,23 @@ void SetupAnimations(not_null<Ui::VerticalLayout*> container) {
 	}) | rpl::start_with_next([](bool enabled) {
 		anim::SetDisabled(!enabled);
 		Local::writeSettings();
+	}, container->lifetime());
+}
+
+void SetupHardwareAcceleration(not_null<Ui::VerticalLayout*> container) {
+	const auto settings = &Core::App().settings();
+	AddButton(
+		container,
+		tr::lng_settings_enable_hwaccel(),
+		st::settingsButtonNoIcon
+	)->toggleOn(
+		rpl::single(settings->hardwareAcceleratedVideo())
+	)->toggledValue(
+	) | rpl::filter([=](bool enabled) {
+		return (enabled != settings->hardwareAcceleratedVideo());
+	}) | rpl::start_with_next([=](bool enabled) {
+		settings->setHardwareAcceleratedVideo(enabled);
+		Core::App().saveSettingsDelayed();
 	}, container->lifetime());
 }
 
@@ -616,7 +629,7 @@ void SetupANGLE(
 		container,
 		tr::lng_settings_angle_backend(),
 		rpl::single(options[backendIndex]),
-		st::settingsButton);
+		st::settingsButtonNoIcon);
 	button->addClickHandler([=] {
 		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
 			const auto save = [=](int index) {
@@ -644,10 +657,11 @@ void SetupANGLE(
 					}
 					Core::Restart();
 				});
-				controller->show(Box<Ui::ConfirmBox>(
-					tr::lng_settings_need_restart(tr::now),
-					tr::lng_settings_restart_now(tr::now),
-					confirmed));
+				controller->show(Ui::MakeConfirmBox({
+					.text = tr::lng_settings_need_restart(),
+					.confirmed = confirmed,
+					.confirmText = tr::lng_settings_restart_now(),
+				}));
 			};
 			SingleChoiceBox(box, {
 				.title = tr::lng_settings_angle_backend(),
@@ -669,7 +683,7 @@ void SetupOpenGL(
 	const auto button = AddButton(
 		container,
 		tr::lng_settings_enable_opengl(),
-		st::settingsButton
+		st::settingsButtonNoIcon
 	)->toggleOn(
 		toggles->events_starting_with_copy(
 			!Core::App().settings().disableOpenGL())
@@ -683,14 +697,16 @@ void SetupOpenGL(
 			Local::writeSettings();
 			Core::Restart();
 		});
-		const auto cancelled = crl::guard(button, [=] {
+		const auto cancelled = crl::guard(button, [=](Fn<void()> close) {
 			toggles->fire(!enabled);
+			close();
 		});
-		controller->show(Box<Ui::ConfirmBox>(
-			tr::lng_settings_need_restart(tr::now),
-			tr::lng_settings_restart_now(tr::now),
-			confirmed,
-			cancelled));
+		controller->show(Ui::MakeConfirmBox({
+			.text = tr::lng_settings_need_restart(),
+			.confirmed = confirmed,
+			.cancelled = cancelled,
+			.confirmText = tr::lng_settings_restart_now(),
+		}));
 	}, container->lifetime());
 }
 
@@ -698,6 +714,7 @@ void SetupPerformance(
 		not_null<Window::SessionController*> controller,
 		not_null<Ui::VerticalLayout*> container) {
 	SetupAnimations(container);
+	SetupHardwareAcceleration(container);
 #ifdef Q_OS_WIN
 	SetupANGLE(controller, container);
 #else // Q_OS_WIN
@@ -714,13 +731,6 @@ void SetupSystemIntegration(
 	AddDivider(container);
 	AddSkip(container);
 	AddSubsectionTitle(container, tr::lng_settings_system_integration());
-	AddButton(
-		container,
-		tr::lng_settings_section_call_settings(),
-		st::settingsButton
-	)->addClickHandler([=] {
-		showOther(Type::Calls);
-	});
 	SetupSystemIntegrationOptions(controller, container);
 	AddSkip(container);
 }
@@ -730,6 +740,10 @@ Advanced::Advanced(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+}
+
+rpl::producer<QString> Advanced::title() {
+	return tr::lng_settings_advanced();
 }
 
 rpl::producer<Type> Advanced::sectionShowOther() {
@@ -748,33 +762,26 @@ void Advanced::setupContent(not_null<Window::SessionController*> controller) {
 		}
 	};
 	const auto addUpdate = [&] {
-		addDivider();
-		AddSkip(content);
-		AddSubsectionTitle(content, tr::lng_settings_version_info());
-		SetupUpdate(
-			&controller->window(),
-			content,
-			[=](Type type) {
+		if (HasUpdate()) {
+			addDivider();
+			AddSkip(content);
+			AddSubsectionTitle(content, tr::lng_settings_version_info());
+			SetupUpdate(content, [=](Type type) {
 				_showOther.fire_copy(type);
 			});
-		AddSkip(content);
+			AddSkip(content);
+		}
 	};
 	if (!cAutoUpdate()) {
 		addUpdate();
 	}
 	addDivider();
-	AddSkip(content);
-	AddSubsectionTitle(content, tr::lng_settings_network_proxy());
-	SetupConnectionType(
-		&controller->window(),
-		&controller->session().account(),
-		content);
-	AddSkip(content);
 	SetupDataStorage(controller, content);
 	SetupAutoDownload(controller, content);
 	SetupSystemIntegration(controller, content, [=](Type type) {
 		_showOther.fire_copy(type);
 	});
+	empty = false;
 
 	AddDivider(content);
 	AddSkip(content);
@@ -793,6 +800,24 @@ void Advanced::setupContent(not_null<Window::SessionController*> controller) {
 	if (cAutoUpdate()) {
 		addUpdate();
 	}
+	if (!HasUpdate()) {
+		AddSkip(content);
+		AddDivider(content);
+		AddSkip(content);
+		content->add(
+			CreateButton(
+				content,
+				tr::lng_settings_experimental(),
+				st::settingsButtonNoIcon)
+		)->setClickedCallback([=] {
+			_showOther.fire_copy(Experimental::Id());
+		});
+	}
+
+	AddSkip(content);
+	AddDivider(content);
+	AddSkip(content);
+	SetupExport(controller, content);
 
 	Ui::ResizeFitChild(this, content);
 }
