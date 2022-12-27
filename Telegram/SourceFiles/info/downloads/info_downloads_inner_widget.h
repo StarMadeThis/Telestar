@@ -8,34 +8,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "ui/rp_widget.h"
-#include "base/object_ptr.h"
-
-namespace Data {
-class ForumTopic;
-} // namespace Data
-
-namespace Window {
-class SessionController;
-} // namespace Window
+#include "ui/widgets/scroll_area.h"
+#include "base/unique_qptr.h"
 
 namespace Ui {
+class SettingsSlider;
 class VerticalLayout;
-template <typename Widget>
-class SlideWrap;
-struct ScrollToRequest;
-class MultiSlideTracker;
+class SearchFieldController;
 } // namespace Ui
 
 namespace Info {
 
-enum class Wrap;
 class Controller;
+struct SelectedItems;
+enum class SelectionAction;
 
-namespace Profile {
+namespace Media {
+class ListWidget;
+} // namespace Media
+
+namespace Downloads {
 
 class Memento;
-class Members;
-class Cover;
+class EmptyWidget;
 
 class InnerWidget final : public Ui::RpWidget {
 public:
@@ -43,11 +38,18 @@ public:
 		QWidget *parent,
 		not_null<Controller*> controller);
 
+	bool showInternal(not_null<Memento*> memento);
+
 	void saveState(not_null<Memento*> memento);
 	void restoreState(not_null<Memento*> memento);
 
+	void setScrollHeightValue(rpl::producer<int> value);
+
 	rpl::producer<Ui::ScrollToRequest> scrollToRequests() const;
-	rpl::producer<int> desiredHeightValue() const override;
+	rpl::producer<SelectedItems> selectedListValue() const;
+	void selectionAction(SelectionAction action);
+
+	~InnerWidget();
 
 protected:
 	int resizeGetHeight(int newWidth) override;
@@ -56,29 +58,23 @@ protected:
 		int visibleBottom) override;
 
 private:
-	object_ptr<RpWidget> setupContent(not_null<RpWidget*> parent);
-	object_ptr<RpWidget> setupSharedMedia(not_null<RpWidget*> parent);
+	int recountHeight();
+	void refreshHeight();
 
-	int countDesiredHeight() const;
-	void updateDesiredHeight() {
-		_desiredHeight.fire(countDesiredHeight());
-	}
+	object_ptr<Media::ListWidget> setupList();
 
 	const not_null<Controller*> _controller;
-	const not_null<PeerData*> _peer;
-	PeerData * const _migrated = nullptr;
-	Data::ForumTopic * const _topic = nullptr;
 
-	Members *_members = nullptr;
-	Cover *_cover = nullptr;
-	Ui::SlideWrap<RpWidget> *_sharedMediaWrap = nullptr;
-	object_ptr<RpWidget> _content;
+	object_ptr<Media::ListWidget> _list = { nullptr };
+	object_ptr<EmptyWidget> _empty;
 
 	bool _inResize = false;
+
 	rpl::event_stream<Ui::ScrollToRequest> _scrollToRequests;
-	rpl::event_stream<int> _desiredHeight;
+	rpl::event_stream<rpl::producer<SelectedItems>> _selectedLists;
+	rpl::event_stream<rpl::producer<int>> _listTops;
 
 };
 
-} // namespace Profile
+} // namespace Downloads
 } // namespace Info

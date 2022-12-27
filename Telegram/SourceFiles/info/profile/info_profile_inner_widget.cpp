@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_buttons.h"
 #include "boxes/abstract_box.h"
 #include "boxes/add_contact_box.h"
+#include "data/data_forum_topic.h"
 #include "ui/boxes/confirm_box.h"
 #include "mainwidget.h"
 #include "main/main_session.h"
@@ -51,6 +52,7 @@ InnerWidget::InnerWidget(
 , _controller(controller)
 , _peer(_controller->key().peer())
 , _migrated(_controller->migrated())
+, _topic(_controller->key().topic())
 , _content(setupContent(this)) {
 	_content->heightValue(
 	) | rpl::start_with_next([this](int height) {
@@ -61,48 +63,37 @@ InnerWidget::InnerWidget(
 	}, lifetime());
 }
 
-bool InnerWidget::canHideDetailsEver() const {
-	return false;// (_peer->isChat() || _peer->isMegagroup());
-}
-
-rpl::producer<bool> InnerWidget::canHideDetails() const {
-	using namespace rpl::mappers;
-	return MembersCountValue(_peer)
-		| rpl::map(_1 > 0);
-}
-
 object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		not_null<RpWidget*> parent) {
 	auto result = object_ptr<Ui::VerticalLayout>(parent);
-	_cover = result->add(object_ptr<Cover>(
-		result,
-		_peer,
-		_controller->parentController()));
+	_cover = _topic
+		? result->add(object_ptr<Cover>(
+			result,
+			_topic,
+			_controller->parentController()))
+		: result->add(object_ptr<Cover>(
+			result,
+			_peer,
+			_controller->parentController()));
 	_cover->showSection(
 	) | rpl::start_with_next([=](Section section) {
-		_controller->showSection(
-			std::make_shared<Info::Memento>(_peer, section));
+		_controller->showSection(_topic
+			? std::make_shared<Info::Memento>(_topic, section)
+			: std::make_shared<Info::Memento>(_peer, section));
 	}, _cover->lifetime());
 	_cover->setOnlineCount(rpl::single(0));
-	auto details = SetupDetails(_controller, parent, _peer);
-	if (canHideDetailsEver()) {
-		_cover->setToggleShown(canHideDetails());
-		_infoWrap = result->add(object_ptr<Ui::SlideWrap<>>(
-			result,
-			std::move(details))
-		)->setDuration(
-			st::infoSlideDuration
-		)->toggleOn(
-			_cover->toggledValue()
-		);
+	if (_topic) {
+		if (_topic->creating()) {
+			return result;
+		}
+		result->add(SetupDetails(_controller, parent, _topic));
 	} else {
-		result->add(std::move(details));
-	}
-	if (auto manage = SetupManage(_controller, result.data(), _peer)) {
-		result->add(object_ptr<Ui::BoxContentDivider>(result));
-		result->add(std::move(manage));
+		result->add(SetupDetails(_controller, parent, _peer));
 	}
 	result->add(setupSharedMedia(result.data()));
+	if (_topic) {
+		return result;
+	}
 	if (auto members = SetupChannelMembers(_controller, result.data(), _peer)) {
 		result->add(std::move(members));
 	}
@@ -119,12 +110,12 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		) | rpl::start_with_next([this](Ui::ScrollToRequest request) {
 			auto min = (request.ymin < 0)
 				? request.ymin
-				: mapFromGlobal(_members->mapToGlobal({ 0, request.ymin })).y();
+				: MapFrom(this, _members, QPoint(0, request.ymin)).y();
 			auto max = (request.ymin < 0)
-				? mapFromGlobal(_members->mapToGlobal(QPoint())).y()
+				? MapFrom(this, _members, QPoint()).y()
 				: (request.ymax < 0)
 				? request.ymax
-				: mapFromGlobal(_members->mapToGlobal({ 0, request.ymax })).y();
+				: MapFrom(this, _members, QPoint(0, request.ymax)).y();
 			_scrollToRequests.fire({ min, max });
 		}, _members->lifetime());
 		_cover->setOnlineCount(_members->onlineCountValue());
@@ -146,6 +137,7 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 			content,
 			_controller,
 			_peer,
+			_topic ? _topic->rootId() : 0,
 			_migrated,
 			type,
 			tracker);
@@ -184,34 +176,6 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 		object_ptr<Ui::VerticalLayout>(parent)
 	);
 
-	// Allows removing shared media links in third column.
-	// Was done for tabs support.
-	//
-	//using ToggledData = std::tuple<bool, Wrap, bool>;
-	//rpl::combine(
-	//	tracker.atLeastOneShownValue(),
-	//	_controller->wrapValue(),
-	//	_isStackBottom.value()
-	//) | rpl::combine_previous(
-	//	ToggledData()
-	//) | rpl::start_with_next([wrap = result.data()](
-	//		const ToggledData &was,
-	//		const ToggledData &now) {
-	//	bool wasOneShown, wasStackBottom, nowOneShown, nowStackBottom;
-	//	Wrap wasWrap, nowWrap;
-	//	std::tie(wasOneShown, wasWrap, wasStackBottom) = was;
-	//	std::tie(nowOneShown, nowWrap, nowStackBottom) = now;
-	//	// MSVC Internal Compiler Error
-	//	//auto [wasOneShown, wasWrap, wasStackBottom] = was;
-	//	//auto [nowOneShown, nowWrap, nowStackBottom] = now;
-	//	wrap->toggle(
-	//		nowOneShown && (nowWrap != Wrap::Side || !nowStackBottom),
-	//		(wasStackBottom == nowStackBottom && wasWrap == nowWrap)
-	//			? anim::type::normal
-	//			: anim::type::instant);
-	//}, result->lifetime());
-	//
-	// Using that instead
 	result->setDuration(
 		st::infoSlideDuration
 	)->toggleOn(
@@ -248,19 +212,14 @@ void InnerWidget::visibleTopBottomUpdated(
 }
 
 void InnerWidget::saveState(not_null<Memento*> memento) {
-	memento->setInfoExpanded(_cover->toggled());
 	if (_members) {
 		memento->setMembersState(_members->saveState());
 	}
 }
 
 void InnerWidget::restoreState(not_null<Memento*> memento) {
-	_cover->toggle(memento->infoExpanded(), anim::type::instant);
 	if (_members) {
 		_members->restoreState(memento->membersState());
-	}
-	if (_infoWrap) {
-		_infoWrap->finishAnimating();
 	}
 	if (_sharedMediaWrap) {
 		_sharedMediaWrap->finishAnimating();

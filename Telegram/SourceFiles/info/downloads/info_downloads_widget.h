@@ -8,21 +8,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "info/info_content_widget.h"
+#include "info/media/info_media_widget.h"
 
-namespace Data {
-class ForumTopic;
-} // namespace Data
+namespace Ui {
+class SearchFieldController;
+} // namespace Ui
 
-namespace Info::Profile {
+namespace Info::Downloads {
 
 class InnerWidget;
-struct MembersState;
 
 class Memento final : public ContentMemento {
 public:
-	explicit Memento(not_null<Controller*> controller);
-	Memento(not_null<PeerData*> peer, PeerId migratedPeerId);
-	explicit Memento(not_null<Data::ForumTopic*> topic);
+	Memento(not_null<Controller*> controller);
+	Memento(not_null<UserData*> self);
+	~Memento();
 
 	object_ptr<ContentWidget> createWidget(
 		QWidget *parent,
@@ -31,18 +31,15 @@ public:
 
 	Section section() const override;
 
-	void setMembersState(std::unique_ptr<MembersState> state);
-	std::unique_ptr<MembersState> membersState();
-
-	~Memento();
+	[[nodiscard]] Media::Memento &media() {
+		return _media;
+	}
+	[[nodiscard]] const Media::Memento &media() const {
+		return _media;
+	}
 
 private:
-	Memento(
-		not_null<PeerData*> peer,
-		Data::ForumTopic *topic,
-		PeerId migratedPeerId);
-
-	std::unique_ptr<MembersState> _membersState;
+	Media::Memento _media;
 
 };
 
@@ -57,7 +54,8 @@ public:
 		const QRect &geometry,
 		not_null<Memento*> memento);
 
-	void setInnerFocus() override;
+	rpl::producer<SelectedItems> selectedListValue() const override;
+	void selectionAction(SelectionAction action) override;
 
 	rpl::producer<QString> title() override;
 
@@ -71,4 +69,6 @@ private:
 
 };
 
-} // namespace Info::Profile
+[[nodiscard]] std::shared_ptr<Info::Memento> Make(not_null<UserData*> self);
+
+} // namespace Info::Downloads

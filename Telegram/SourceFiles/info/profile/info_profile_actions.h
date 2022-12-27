@@ -13,21 +13,25 @@ namespace Ui {
 class RpWidget;
 } // namespace Ui
 
+namespace Data {
+class ForumTopic;
+} // namespace Data
+
 namespace Info {
-
 class Controller;
+} // namespace Info
 
-namespace Profile {
+namespace Info::Profile {
 
 object_ptr<Ui::RpWidget> SetupDetails(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
 	not_null<PeerData*> peer);
 
-object_ptr<Ui::RpWidget> SetupManage(
+object_ptr<Ui::RpWidget> SetupDetails(
 	not_null<Controller*> controller,
 	not_null<Ui::RpWidget*> parent,
-	not_null<PeerData*> peer);
+	not_null<Data::ForumTopic*> topic);
 
 object_ptr<Ui::RpWidget> SetupActions(
 	not_null<Controller*> controller,
@@ -39,5 +43,4 @@ object_ptr<Ui::RpWidget> SetupChannelMembers(
 	not_null<Ui::RpWidget*> parent,
 	not_null<PeerData*> peer);
 
-} // namespace Profile
-} // namespace Info
+} // namespace Info::Profile
