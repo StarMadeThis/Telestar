@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "mtproto/dedicated_file_loader.h"
 
-#include "kotato/kotato_settings.h"
 #include "mtproto/facade.h"
 #include "main/main_account.h" // Account::sessionChanges.
 #include "main/main_session.h" // Session::account.
@@ -68,7 +67,7 @@ std::optional<DedicatedLoader::File> ParseFile(
 		LOG(("Update Error: MTP file name not found."));
 		return std::nullopt;
 	}
-	const auto size = fields.vsize().v;
+	const auto size = int64(fields.vsize().v);
 	if (size <= 0) {
 		LOG(("Update Error: MTP file size is invalid."));
 		return std::nullopt;
@@ -79,11 +78,6 @@ std::optional<DedicatedLoader::File> ParseFile(
 		fields.vfile_reference(),
 		MTP_string());
 	return DedicatedLoader::File{ name, size, fields.vdc_id().v, location };
-}
-
-int RequestCount() {
-	static const auto count = 2 + (2 * ::Kotato::JsonSettings::GetInt("net_speed_boost"));
-	return count;
 }
 
 } // namespace
@@ -177,12 +171,12 @@ void AbstractDedicatedLoader::start() {
 	startLoading();
 }
 
-int AbstractDedicatedLoader::alreadySize() const {
+int64 AbstractDedicatedLoader::alreadySize() const {
 	QMutexLocker lock(&_sizesMutex);
 	return _alreadySize;
 }
 
-int AbstractDedicatedLoader::totalSize() const {
+int64 AbstractDedicatedLoader::totalSize() const {
 	QMutexLocker lock(&_sizesMutex);
 	return _totalSize;
 }
@@ -229,7 +223,7 @@ bool AbstractDedicatedLoader::validateOutput() {
 	if (fullSize < _chunkSize || fullSize > kMaxFileSize) {
 		return _output.remove();
 	}
-	const auto goodSize = int((fullSize % _chunkSize)
+	const auto goodSize = int64((fullSize % _chunkSize)
 		? (fullSize - (fullSize % _chunkSize))
 		: fullSize);
 	if (_output.resize(goodSize)) {
@@ -316,7 +310,7 @@ void DedicatedLoader::startLoading() {
 }
 
 void DedicatedLoader::sendRequest() {
-	if (_requests.size() >= RequestCount() || _offset >= _size) {
+	if (_requests.size() >= kRequestsCount || _offset >= _size) {
 		return;
 	}
 	const auto offset = _offset;
@@ -325,14 +319,14 @@ void DedicatedLoader::sendRequest() {
 		MTPupload_GetFile(
 			MTP_flags(0),
 			_location,
-			MTP_int(offset),
+			MTP_long(offset),
 			MTP_int(kChunkSize)),
 		[=](const MTPupload_File &result) { gotPart(offset, result); },
 		failHandler(),
 		MTP::updaterDcId(_dcId));
 	_offset += kChunkSize;
 
-	if (_requests.size() < RequestCount()) {
+	if (_requests.size() < kRequestsCount) {
 		base::call_delayed(kNextRequestDelay, this, [=] { sendRequest(); });
 	}
 }

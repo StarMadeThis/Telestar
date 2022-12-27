@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace MTP {
 
+[[nodiscard]] QString ConfigDefaultReactionEmoji();
+
 struct ConfigFields {
 	int chatSizeMax = 200;
 	int megagroupSizeMax = 10000;
@@ -39,9 +41,10 @@ struct ConfigFields {
 	int callPacketTimeoutMs = 10000;
 	int webFileDcId = 4;
 	QString txtDomainString;
-	rpl::variable<bool> phoneCallsEnabled = true;
 	bool blockedMode = false;
 	int captionLengthMax = 1024;
+	QString reactionDefaultEmoji = ConfigDefaultReactionEmoji();
+	uint64 reactionDefaultCustom;
 };
 
 class Config final {
