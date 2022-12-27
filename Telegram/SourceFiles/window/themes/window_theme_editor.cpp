@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/themes/window_theme_editor.h"
 
-#include "kotato/kotato_lang.h"
 #include "window/themes/window_theme.h"
 #include "window/themes/window_theme_editor_block.h"
 #include "window/themes/window_theme_editor_box.h"
@@ -25,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/style/style_palette_colorizer.h"
 #include "ui/image/image_prepare.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "base/parse_helper.h"
 #include "base/zlib_help.h"
@@ -33,7 +33,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "boxes/edit_color_box.h"
 #include "lang/lang_keys.h"
-#include "facades.h"
 #include "styles/style_window.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_layers.h"
@@ -201,7 +200,7 @@ QString bytesToUtf8(QLatin1String bytes) {
 
 } // namespace
 
-class Editor::Inner : public Ui::RpWidget, private base::Subscriber {
+class Editor::Inner final : public Ui::RpWidget {
 public:
 	Inner(QWidget *parent, const QString &path);
 
@@ -397,24 +396,36 @@ Editor::Inner::Inner(QWidget *parent, const QString &path)
 , _existingRows(this, EditorBlock::Type::Existing, &_context)
 , _newRows(this, EditorBlock::Type::New, &_context) {
 	resize(st::windowMinWidth, st::windowMinHeight);
-	subscribe(_context.resized, [this] {
+
+	_context.resized.events(
+	) | rpl::start_with_next([=] {
 		resizeToWidth(width());
-	});
-	subscribe(_context.pending, [this](const EditorBlock::Context::EditionData &data) {
+	}, lifetime());
+
+	using Context = EditorBlock::Context;
+	_context.pending.events(
+	) | rpl::start_with_next([=](const Context::EditionData &data) {
 		applyEditing(data.name, data.copyOf, data.value);
-	});
-	subscribe(_context.updated, [this] {
+	}, lifetime());
+
+	_context.updated.events(
+	) | rpl::start_with_next([=] {
 		if (_context.name.isEmpty() && _focusCallback) {
 			_focusCallback();
 		}
-	});
-	subscribe(_context.scroll, [this](const EditorBlock::Context::ScrollData &data) {
+	}, lifetime());
+
+	_context.scroll.events(
+	) | rpl::start_with_next([=](const Context::ScrollData &data) {
 		if (_scrollCallback) {
-			auto top = (data.type == EditorBlock::Type::Existing ? _existingRows : _newRows)->y();
+			auto top = (data.type == EditorBlock::Type::Existing
+				? _existingRows
+				: _newRows)->y();
 			top += data.position;
 			_scrollCallback(top, top + data.height);
 		}
-	});
+	}, lifetime());
+
 	Background()->updates(
 	) | rpl::start_with_next([=](const BackgroundUpdate &update) {
 		if (_applyingUpdate || !Background()->editingTheme()) {
@@ -424,8 +435,8 @@ Editor::Inner::Inner(QWidget *parent, const QString &path)
 		if (update.type == BackgroundUpdate::Type::TestingTheme) {
 			Revert();
 			base::call_delayed(st::slideDuration, this, [] {
-				Ui::show(Box<Ui::InformBox>(
-					tr::lng_theme_editor_cant_change_theme(tr::now)));
+				Ui::show(Ui::MakeInformBox(
+					tr::lng_theme_editor_cant_change_theme()));
 			});
 		}
 	}, lifetime());
@@ -663,13 +674,13 @@ Editor::Editor(
 
 	_inner = _scroll->setOwnedWidget(object_ptr<Inner>(this, path));
 
-	_save->setClickedCallback(App::LambdaDelayed(
+	_save->setClickedCallback(base::fn_delayed(
 		st::defaultRippleAnimation.hideDuration,
 		this,
 		[=] { save(); }));
 
 	_inner->setErrorCallback([=] {
-		window->show(Box<Ui::InformBox>(tr::lng_theme_editor_error(tr::now)));
+		window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 
 		// This could be from inner->_context observable notification.
 		// We should not destroy it while iterating in subscribers.
@@ -753,23 +764,21 @@ void Editor::exportTheme() {
 		QFile f(path);
 		if (!f.open(QIODevice::WriteOnly)) {
 			LOG(("Theme Error: could not open zip-ed theme file '%1' for writing").arg(path));
-			_window->show(
-				Box<Ui::InformBox>(tr::lng_theme_editor_error(tr::now)));
+			_window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 			return;
 		}
 		if (f.write(result) != result.size()) {
 			LOG(("Theme Error: could not write zip-ed theme to file '%1'").arg(path));
-			_window->show(
-				Box<Ui::InformBox>(tr::lng_theme_editor_error(tr::now)));
+			_window->show(Ui::MakeInformBox(tr::lng_theme_editor_error()));
 			return;
 		}
-		Ui::Toast::Show(tr::lng_theme_editor_done(tr::now));
+		_window->showToast(tr::lng_theme_editor_done(tr::now));
 	}));
 }
 
 void Editor::importTheme() {
 	auto filters = QStringList(
-		qsl("Theme files (*.tdesktop-theme *.tdesktop-palette)"));
+		u"Theme files (*.tdesktop-theme *.tdesktop-palette)"_q);
 	filters.push_back(FileDialog::AllFilesFilter());
 	const auto callback = crl::guard(this, [=](
 		const FileDialog::OpenResult &result) {
@@ -808,7 +817,7 @@ void Editor::importTheme() {
 	FileDialog::GetOpenPath(
 		this,
 		tr::lng_theme_editor_menu_import(tr::now),
-		filters.join(qsl(";;")),
+		filters.join(u";;"_q),
 		crl::guard(this, callback));
 }
 
@@ -820,10 +829,10 @@ QByteArray Editor::ColorizeInContent(
 
 void Editor::save() {
 	if (Core::App().passcodeLocked()) {
-		Ui::Toast::Show(ktr("ktg_theme_editor_need_unlock"));
+		_window->showToast(tr::lng_theme_editor_need_unlock(tr::now));
 		return;
 	} else if (!_window->account().sessionExists()) {
-		Ui::Toast::Show(tr::lng_theme_editor_need_auth(tr::now));
+		_window->showToast(tr::lng_theme_editor_need_auth(tr::now));
 		return;
 	} else if (_saving) {
 		return;
@@ -907,10 +916,11 @@ void Editor::closeWithConfirmation() {
 		closeEditor();
 		close();
 	});
-	_window->show(Box<Ui::ConfirmBox>(
-		tr::lng_theme_editor_sure_close(tr::now),
-		tr::lng_close(tr::now),
-		close));
+	_window->show(Ui::MakeConfirmBox({
+		.text = tr::lng_theme_editor_sure_close(),
+		.confirmed = close,
+		.confirmText = tr::lng_close(),
+	}));
 }
 
 void Editor::closeEditor() {

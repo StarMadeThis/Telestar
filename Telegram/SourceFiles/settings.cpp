@@ -7,14 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings.h"
 
-#include "kotato/kotato_version.h"
 #include "ui/emoji_config.h"
 
 Qt::LayoutDirection gLangDir = Qt::LeftToRight;
 
-bool gInstallBetaVersion = AppKotatoBetaVersion;
-uint64 gAlphaVersion = AppKotatoTestVersionFull;
-uint64 gRealAlphaVersion = AppKotatoTestVersionFull;
+bool gInstallBetaVersion = AppBetaVersion;
+uint64 gAlphaVersion = AppAlphaVersion;
+uint64 gRealAlphaVersion = AppAlphaVersion;
 QByteArray gAlphaPrivateKey;
 
 bool gManyInstance = false;
@@ -48,8 +47,8 @@ QByteArray gLocalSalt;
 int gScreenScale = style::kScaleAuto;
 int gConfigScale = style::kScaleAuto;
 
-QString gDateFormat = qsl("dd.MM.yy");
-QString gTimeFormat = qsl("hh:mm");
+QString gDateFormat = u"dd.MM.yy"_q;
+QString gTimeFormat = u"hh:mm"_q;
 
 RecentStickerPreload gRecentStickersPreload;
 RecentStickerPack gRecentStickers;

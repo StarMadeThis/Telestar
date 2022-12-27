@@ -27,14 +27,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/emoji_config.h"
 #include "chat_helpers/emoji_sets_manager.h"
 #include "window/window_session_controller.h"
-#include "window/window_filters_menu.h"
 #include "window/themes/window_theme.h"
 #include "window/themes/window_theme_editor.h"
 #include "ui/boxes/confirm_box.h"
 #include "data/data_peer.h"
 #include "mainwindow.h"
 #include "apiwrap.h" // ApiWrap::acceptTerms.
-#include "facades.h"
 #include "styles/style_layers.h"
 
 #include <QtGui/QWindow>
@@ -54,9 +52,9 @@ Controller::Controller(
 
 Controller::Controller(CreateArgs &&args)
 : _singlePeer(args.singlePeer)
+, _isActiveTimer([=] { updateIsActive(); })
 , _widget(this)
-, _adaptive(std::make_unique<Adaptive>())
-, _isActiveTimer([=] { updateIsActive(); }) {
+, _adaptive(std::make_unique<Adaptive>()) {
 	_widget.init();
 }
 
@@ -97,20 +95,25 @@ void Controller::showAccount(
 
 	_account->sessionValue(
 	) | rpl::start_with_next([=](Main::Session *session) {
+		if (!isPrimary() && (&_singlePeer->session() != session)) {
+			Core::App().closeWindow(this);
+			return;
+		}
 		const auto was = base::take(_sessionController);
 		_sessionController = session
 			? std::make_unique<SessionController>(session, this)
 			: nullptr;
-		setupSideBar();
+		auto oldContentCache = _widget.grabForSlideAnimation();
 		_widget.updateWindowIcon();
 		if (session) {
-			setupMain(singlePeerShowAtMsgId);
+			setupSideBar();
+			setupMain(singlePeerShowAtMsgId, std::move(oldContentCache));
 
 			session->updates().isIdleValue(
 			) | rpl::filter([=](bool idle) {
 				return !idle;
 			}) | rpl::start_with_next([=] {
-				widget()->checkHistoryActivation();
+				widget()->checkActivation();
 			}, _sessionController->lifetime());
 
 			session->termsLockValue(
@@ -120,11 +123,11 @@ void Controller::showAccount(
 			}, _sessionController->lifetime());
 
 			widget()->setInnerFocus();
-		} else if (!isPrimary()) {
-			// #TODO windows test
-			close();
+
+			session->updates().updateOnline(crl::now());
 		} else {
-			setupIntro();
+			sideBarChanged();
+			setupIntro(std::move(oldContentCache));
 			_widget.updateGlobalMenu();
 		}
 
@@ -137,11 +140,9 @@ PeerData *Controller::singlePeer() const {
 }
 
 void Controller::setupSideBar() {
+	Expects(_sessionController != nullptr);
+
 	if (!isPrimary()) {
-		return;
-	}
-	if (!_sessionController) {
-		sideBarChanged();
 		return;
 	}
 	_sessionController->filtersMenuChanged(
@@ -150,7 +151,6 @@ void Controller::setupSideBar() {
 	}, _sessionController->lifetime());
 
 	if (_sessionController->session().settings().dialogsFiltersEnabled()) {
-		ResetFiltersFirstLoad();
 		_sessionController->toggleFiltersMenu(true);
 	} else {
 		sideBarChanged();
@@ -167,7 +167,7 @@ void Controller::checkLockByTerms() {
 		}
 		return;
 	}
-	Ui::hideSettingsAndLayer(anim::type::instant);
+	hideSettingsAndLayer(anim::type::instant);
 	const auto box = show(Box<TermsBox>(
 		*data,
 		tr::lng_terms_agree(),
@@ -232,21 +232,26 @@ void Controller::showTermsDelete() {
 		if (const auto session = account().maybeSession()) {
 			session->termsDeleteNow();
 		} else {
-			Ui::hideLayer();
+			hideLayer();
 		}
 	};
 	show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_terms_delete_warning(tr::now),
-			tr::lng_terms_delete_now(tr::now),
-			st::attentionBoxButton,
-			deleteByTerms),
+		Ui::MakeConfirmBox({
+			.text = tr::lng_terms_delete_warning(),
+			.confirmed = deleteByTerms,
+			.confirmText = tr::lng_terms_delete_now(),
+			.confirmStyle = &st::attentionBoxButton,
+		}),
 		Ui::LayerOption::KeepOther);
 }
 
 void Controller::finishFirstShow() {
 	_widget.finishFirstShow();
 	checkThemeEditor();
+}
+
+Main::Session *Controller::maybeSession() const {
+	return _account ? _account->maybeSession() : nullptr;
 }
 
 bool Controller::locked() const {
@@ -278,16 +283,19 @@ void Controller::clearPasscodeLock() {
 	}
 }
 
-void Controller::setupIntro() {
-	_widget.setupIntro(Core::App().domain().maybeLastOrSomeAuthedAccount()
+void Controller::setupIntro(QPixmap oldContentCache) {
+	const auto point = Core::App().domain().maybeLastOrSomeAuthedAccount()
 		? Intro::EnterPoint::Qr
-		: Intro::EnterPoint::Start);
+		: Intro::EnterPoint::Start;
+	_widget.setupIntro(point, std::move(oldContentCache));
 }
 
-void Controller::setupMain(MsgId singlePeerShowAtMsgId) {
+void Controller::setupMain(
+		MsgId singlePeerShowAtMsgId,
+		QPixmap oldContentCache) {
 	Expects(_sessionController != nullptr);
 
-	_widget.setupMain(singlePeerShowAtMsgId);
+	_widget.setupMain(singlePeerShowAtMsgId, std::move(oldContentCache));
 
 	if (const auto id = Ui::Emoji::NeedToSwitchBackToId()) {
 		Ui::Emoji::LoadAndSwitchTo(&_sessionController->session(), id);
@@ -326,6 +334,18 @@ void Controller::showBox(
 
 void Controller::showRightColumn(object_ptr<TWidget> widget) {
 	_widget.showRightColumn(std::move(widget));
+}
+
+void Controller::hideLayer(anim::type animated) {
+	_widget.ui_showBox({ nullptr }, Ui::LayerOption::CloseOther, animated);
+}
+
+void Controller::hideSettingsAndLayer(anim::type animated) {
+	_widget.ui_hideSettingsAndLayer(animated);
+}
+
+bool Controller::isLayerShown() const {
+	return _widget.ui_isLayerShown();
 }
 
 void Controller::sideBarChanged() {
@@ -375,7 +395,17 @@ void Controller::preventOrInvoke(Fn<void()> &&callback) {
 
 void Controller::invokeForSessionController(
 		not_null<Main::Account*> account,
+		PeerData *singlePeer,
 		Fn<void(not_null<SessionController*>)> &&callback) {
+	const auto separateWindow = singlePeer
+		? Core::App().separateWindowForPeer(singlePeer)
+		: nullptr;
+	const auto separateSession = separateWindow
+		? separateWindow->sessionController()
+		: nullptr;
+	if (separateSession) {
+		return callback(separateSession);
+	}
 	_account->domain().activate(std::move(account));
 	if (_sessionController) {
 		callback(_sessionController.get());
@@ -383,11 +413,9 @@ void Controller::invokeForSessionController(
 }
 
 QPoint Controller::getPointForCallPanelCenter() const {
-	Expects(_widget.windowHandle() != nullptr);
-
 	return _widget.isActive()
 		? _widget.geometry().center()
-		: _widget.windowHandle()->screen()->geometry().center();
+		: _widget.screen()->geometry().center();
 }
 
 void Controller::showLogoutConfirmation() {
@@ -405,11 +433,12 @@ void Controller::showLogoutConfirmation() {
 			close();
 		}
 	};
-	show(Box<Ui::ConfirmBox>(
-		tr::lng_sure_logout(tr::now),
-		tr::lng_settings_logout(tr::now),
-		st::attentionBoxButton,
-		callback));
+	show(Ui::MakeConfirmBox({
+		.text = tr::lng_sure_logout(),
+		.confirmed = callback,
+		.confirmText = tr::lng_settings_logout(),
+		.confirmStyle = &st::attentionBoxButton,
+	}));
 }
 
 Window::Adaptive &Controller::adaptive() const {

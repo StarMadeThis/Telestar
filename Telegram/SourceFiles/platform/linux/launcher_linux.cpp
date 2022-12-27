@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "platform/linux/launcher_linux.h"
 
-#include "kotato/kotato_settings.h"
 #include "core/crash_reports.h"
 #include "core/update_checker.h"
 #include "webview/platform/linux/webview_linux_webkit2gtk.h"
@@ -24,6 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Platform {
 namespace {
+
+Launcher *LauncherInstance = nullptr;
 
 class Arguments {
 public:
@@ -49,6 +50,15 @@ private:
 Launcher::Launcher(int argc, char *argv[])
 : Core::Launcher(argc, argv)
 , _arguments(argv, argv + argc) {
+	Expects(LauncherInstance == nullptr);
+
+	LauncherInstance = this;
+}
+
+Launcher &Launcher::Instance() {
+	Expects(LauncherInstance != nullptr);
+
+	return *LauncherInstance;
 }
 
 int Launcher::exec() {
@@ -64,25 +74,6 @@ int Launcher::exec() {
 
 void Launcher::initHook() {
 	QApplication::setAttribute(Qt::AA_DisableSessionManager, true);
-	QApplication::setDesktopFileName([] {
-		if (!Core::UpdaterDisabled() && !cExeName().isEmpty()) {
-			const auto appimagePath = qsl("file://%1%2").arg(
-				cExeDir(),
-				cExeName()).toUtf8();
-
-			char md5Hash[33] = { 0 };
-			hashMd5Hex(
-				appimagePath.constData(),
-				appimagePath.size(),
-				md5Hash);
-
-			return qsl("appimagekit_%1-%2.desktop").arg(
-				md5Hash,
-				AppName.utf16().replace(' ', '_'));
-		}
-
-		return qsl(QT_STRINGIFY(TDESKTOP_LAUNCHER_BASENAME) ".desktop");
-	}());
 }
 
 bool Launcher::launchUpdater(UpdaterLaunch action) {
@@ -93,8 +84,8 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	const auto binaryPath = (action == UpdaterLaunch::JustRelaunch)
 		? (cExeDir() + cExeName())
 		: (cWriteProtected()
-			? (cWorkingDir() + qsl("tupdates/temp/Updater"))
-			: (cExeDir() + qsl("Updater")));
+			? (cWorkingDir() + u"tupdates/temp/Updater"_q)
+			: (cExeDir() + u"Updater"_q));
 
 	auto argumentsList = Arguments();
 	if (action == UpdaterLaunch::PerformUpdate && cWriteProtected()) {
@@ -111,7 +102,7 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 	if (cStartInTray()) {
 		argumentsList.push("-startintray");
 	}
-	if (cDataFile() != qsl("data")) {
+	if (cDataFile() != u"data"_q) {
 		argumentsList.push("-key");
 		argumentsList.push(QFile::encodeName(cDataFile()));
 	}
@@ -136,17 +127,6 @@ bool Launcher::launchUpdater(UpdaterLaunch action) {
 		if (cWriteProtected()) {
 			argumentsList.push("-writeprotected");
 		}
-	}
-
-	if (!::Kotato::JsonSettings::GetBool("api_use_env")) {
-		argumentsList.push("-no-env-api");
-	}
-
-	if (::Kotato::JsonSettings::GetBool("api_start_params")) {
-		argumentsList.push("-api-id");
-		argumentsList.push(QFile::encodeName(QString::number(::Kotato::JsonSettings::GetInt("api_id"))));
-		argumentsList.push("-api-hash");
-		argumentsList.push(QFile::encodeName(::Kotato::JsonSettings::GetString("api_hash")));
 	}
 
 	Logs::closeMain();

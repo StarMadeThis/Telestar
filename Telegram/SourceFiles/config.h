@@ -17,14 +17,9 @@ enum {
 	LocalEncryptNoPwdIterCount = 4, // key derivation iteration count without pwd (not secure anyway)
 	LocalEncryptSaltSize = 32, // 256 bit
 
-	AnimationTimerDelta = 7,
 	RecentInlineBotsLimit = 10,
 
 	AutoSearchTimeout = 900, // 0.9 secs
-	SearchPerPage = 50,
-	SearchManyPerPage = 100,
-	LinksOverviewPerPage = 12,
-	MediaOverviewStartPerPage = 5,
 
 	PreloadHeightsCount = 3, // when 3 screens to scroll left make a preload request
 
@@ -54,19 +49,48 @@ inline const char *cGUIDStr() {
 
 static const char *UpdatesPublicKey = "\
 -----BEGIN RSA PUBLIC KEY-----\n\
-MIGJAoGBALUEi8NQfcq/GToD5CdgdNhgj2at2nusoWsHuUdIOGEOehpt2PiQlzt+\n\
-qziKJDO8+tPnQV0Nzq6UqZXA0eCT4CvP2jZyLq/xnNzlinQXT+wPu2wqBabRTfoC\n\
-TIiLseFjv2zEsXCCkhiaUfAtU3w09yw0/D8vl1/5+N/4mpAic+0VAgMBAAE=\n\
+MIGJAoGBAMA4ViQrjkPZ9xj0lrer3r23JvxOnrtE8nI69XLGSr+sRERz9YnUptnU\n\
+BZpkIfKaRcl6XzNJiN28cVwO1Ui5JSa814UAiDHzWUqCaXUiUEQ6NmNTneiGx2sQ\n\
++9PKKlb8mmr3BB9A45ZNwLT6G9AK3+qkZLHojeSA+m84/a6GP4svAgMBAAE=\n\
 -----END RSA PUBLIC KEY-----\
 ";
 
 static const char *UpdatesPublicBetaKey = "\
 -----BEGIN RSA PUBLIC KEY-----\n\
-MIGJAoGBAPgjMkWHsxk1d4NcPC5jyPlEddvOdl3yH+s8xpm8MxCVwhWu5dazkC0Z\n\
-v1/0UnkegO4jNkSY3ycDqn+T3NjxNxnL0EsKh7MjinyMUe3ZISzaIyrdq/8v4bvB\n\
-/Z1X5Ruw2HacoWo/EVsXY9zCTrY53IRrKy4HQbCOloK2+TBimyX5AgMBAAE=\n\
+MIGJAoGBALWu9GGs0HED7KG7BM73CFZ6o0xufKBRQsdnq3lwA8nFQEvmdu+g/I1j\n\
+0LQ+0IQO7GW4jAgzF/4+soPDb6uHQeNFrlVx1JS9DZGhhjZ5rf65yg11nTCIHZCG\n\
+w/CVnbwQOw0g5GBwwFV3r0uTTvy44xx8XXxk+Qknu4eBCsmrAFNnAgMBAAE=\n\
 -----END RSA PUBLIC KEY-----\
 ";
+
+#if defined TDESKTOP_API_ID && defined TDESKTOP_API_HASH
+
+constexpr auto ApiId = TDESKTOP_API_ID;
+constexpr auto ApiHash = QT_STRINGIFY(TDESKTOP_API_HASH);
+
+#else // TDESKTOP_API_ID && TDESKTOP_API_HASH
+
+// To build your version of Telegram Desktop you're required to provide
+// your own 'api_id' and 'api_hash' for the Telegram API access.
+//
+// How to obtain your 'api_id' and 'api_hash' is described here:
+// https://core.telegram.org/api/obtaining_api_id
+//
+// If you're building the application not for deployment,
+// but only for test purposes you can comment out the error below.
+//
+// This will allow you to use TEST ONLY 'api_id' and 'api_hash' which are
+// very limited by the Telegram API server.
+//
+// Your users will start getting internal server errors on login
+// if you deploy an app using those 'api_id' and 'api_hash'.
+
+#error You are required to provide API_ID and API_HASH.
+
+constexpr auto ApiId = 17349;
+constexpr auto ApiHash = "344583e45741c457fe1862106095a5eb";
+
+#endif // TDESKTOP_API_ID && TDESKTOP_API_HASH
 
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
 #error "Only little endian is supported!"
@@ -84,7 +108,7 @@ static const char *AlphaPrivateKey = "";
 extern QString gKeyFile;
 inline const QString &cDataFile() {
 	if (!gKeyFile.isEmpty()) return gKeyFile;
-	static const QString res(qsl("data"));
+	static const QString res(u"data"_q);
 	return res;
 }
 

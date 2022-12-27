@@ -53,8 +53,8 @@ public:
 
 	void setupPasscodeLock();
 	void clearPasscodeLock();
-	void setupIntro(Intro::EnterPoint point);
-	void setupMain(MsgId singlePeerShowAtMsgId);
+	void setupIntro(Intro::EnterPoint point, QPixmap oldContentCache);
+	void setupMain(MsgId singlePeerShowAtMsgId, QPixmap oldContentCache);
 
 	void showSettings();
 
@@ -62,26 +62,28 @@ public:
 
 	MainWidget *sessionContent() const;
 
-	[[nodiscard]] bool doWeMarkAsRead();
-
+	void checkActivation();
+	[[nodiscard]] bool markingAsRead() const;
 
 	bool takeThirdSectionFromLayer();
 
-	void checkHistoryActivation();
-
 	void sendPaths();
 
-	bool contentOverlapped(const QRect &globalRect);
-	bool contentOverlapped(QWidget *w, QPaintEvent *e) {
-		return contentOverlapped(QRect(w->mapToGlobal(e->rect().topLeft()), e->rect().size()));
+	[[nodiscard]] bool contentOverlapped(const QRect &globalRect);
+	[[nodiscard]] bool contentOverlapped(QWidget *w, QPaintEvent *e) {
+		return contentOverlapped(
+			QRect(w->mapToGlobal(e->rect().topLeft()), e->rect().size()));
 	}
-	bool contentOverlapped(QWidget *w, const QRegion &r) {
-		return contentOverlapped(QRect(w->mapToGlobal(r.boundingRect().topLeft()), r.boundingRect().size()));
+	[[nodiscard]] bool contentOverlapped(QWidget *w, const QRegion &r) {
+		return contentOverlapped(QRect(
+			w->mapToGlobal(r.boundingRect().topLeft()),
+			r.boundingRect().size()));
 	}
 
 	void showMainMenu();
-	void updateTrayMenu() override;
 	void fixOrder() override;
+
+	[[nodiscard]] QPixmap grabForSlideAnimation();
 
 	void showLayer(
 		std::unique_ptr<Ui::LayerWidget> &&layer,
@@ -99,7 +101,7 @@ public:
 		anim::type animated);
 	void ui_hideSettingsAndLayer(anim::type animated);
 	void ui_removeLayerBlackout();
-	bool ui_isLayerShown();
+	[[nodiscard]] bool ui_isLayerShown() const;
 	bool showMediaPreview(
 		Data::FileOrigin origin,
 		not_null<DocumentData*> document);
@@ -115,16 +117,9 @@ protected:
 	void closeEvent(QCloseEvent *e) override;
 
 	void initHook() override;
-	void activeChangedHook() override;
 	void clearWidgetsHook() override;
 
 private:
-	[[nodiscard]] bool skipTrayClick() const;
-
-	void createTrayIconMenu();
-	void handleTrayIconActication(
-		QSystemTrayIcon::ActivationReason reason) override;
-
 	void applyInitialWorkMode();
 	void ensureLayerCreated();
 	void destroyLayer();
@@ -139,16 +134,9 @@ private:
 
 	void themeUpdated(const Window::Theme::BackgroundUpdate &data);
 
-	void toggleDisplayNotifyFromTray();
-	void toggleSoundNotifyFromTray();
-
-	QPixmap grabInner();
-
 	std::unique_ptr<Media::SystemMediaControlsManager> _mediaControlsManager;
 
-	crl::time _lastTrayClickTime = 0;
 	QPoint _lastMousePosition;
-	bool _activeForTrayIconAction = true;
 
 	object_ptr<Window::PasscodeLockWidget> _passcodeLock = { nullptr };
 	object_ptr<Intro::Widget> _intro = { nullptr };
@@ -158,10 +146,4 @@ private:
 
 	object_ptr<Window::Theme::WarningWidget> _testingThemeWarning = { nullptr };
 
-	rpl::event_stream<> _updateTrayMenuTextActions;
-
 };
-
-namespace App {
-MainWindow *wnd();
-} // namespace App
