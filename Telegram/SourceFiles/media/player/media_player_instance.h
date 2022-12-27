@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class AudioMsgId;
 class DocumentData;
+class History;
 
 namespace Media {
 namespace Audio {
@@ -42,6 +43,8 @@ class PowerSaveBlocker;
 namespace Media {
 namespace Player {
 
+extern const char kOptionDisableAutoplayNext[];
+
 enum class RepeatMode {
 	None,
 	One,
@@ -66,7 +69,7 @@ void SaveLastPlaybackPosition(
 
 not_null<Instance*> instance();
 
-class Instance : private base::Subscriber {
+class Instance final {
 public:
 	enum class Seeking {
 		Start,
@@ -165,8 +168,6 @@ public:
 
 	[[nodiscard]] bool pauseGifByRoundVideo() const;
 
-	void documentLoadProgress(DocumentData *document);
-
 private:
 	using SharedMediaType = Storage::SharedMediaType;
 	using SliceKey = SparseIdsMergedSlice::Key;
@@ -193,6 +194,7 @@ private:
 		rpl::lifetime sessionLifetime;
 		rpl::event_stream<> playlistChanges;
 		History *history = nullptr;
+		MsgId topicRootId = 0;
 		History *migrated = nullptr;
 		Main::Session *session = nullptr;
 		bool isPlaying = false;
@@ -293,7 +295,10 @@ private:
 	void requestRoundVideoResize() const;
 	void requestRoundVideoRepaint() const;
 
-	void setHistory(not_null<Data*> data, History *history);
+	void setHistory(
+		not_null<Data*> data,
+		History *history,
+		Main::Session *sessionFallback = nullptr);
 	void setSession(not_null<Data*> data, Main::Session *session);
 
 	Data _songData;

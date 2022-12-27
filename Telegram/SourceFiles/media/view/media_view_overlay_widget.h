@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_playback_controls.h"
 #include "media/view/media_view_open_common.h"
 
+class History;
+
 namespace Data {
 class PhotoMedia;
 class DocumentMedia;
@@ -129,7 +131,8 @@ private:
 			v::null_t,
 			not_null<PhotoData*>,
 			not_null<DocumentData*>> data;
-		HistoryItem *item;
+		HistoryItem *item = nullptr;
+		MsgId topicRootId = 0;
 	};
 	enum class SavePhotoVideo {
 		None,
@@ -139,6 +142,16 @@ private:
 	struct ContentGeometry {
 		QRectF rect;
 		qreal rotation = 0.;
+	};
+	struct StartStreaming {
+		StartStreaming() : continueStreaming(false), startTime(0) {
+		}
+		StartStreaming(bool continueStreaming, crl::time startTime)
+		: continueStreaming(continueStreaming)
+		, startTime(startTime) {
+		}
+		const bool continueStreaming = false;
+		const crl::time startTime = 0;
 	};
 
 	[[nodiscard]] not_null<QWindow*> window() const;
@@ -213,8 +226,8 @@ private:
 	void assignMediaPointer(not_null<PhotoData*> photo);
 
 	void updateOver(QPoint mpos);
-	void moveToScreen();
-	void updateGeometry();
+	void moveToScreen(bool inMove = false);
+	void updateGeometry(bool inMove = false);
 	bool moveToNext(int delta);
 	void preloadData(int delta);
 
@@ -229,9 +242,14 @@ private:
 	Entity entityByIndex(int index) const;
 	Entity entityForItemId(const FullMsgId &itemId) const;
 	bool moveToEntity(const Entity &entity, int preloadDelta = 0);
+
+	struct ItemContext {
+		not_null<HistoryItem*> item;
+		MsgId topicRootId = 0;
+	};
 	void setContext(std::variant<
 		v::null_t,
-		not_null<HistoryItem*>,
+		ItemContext,
 		not_null<PeerData*>> context);
 
 	void refreshLang();
@@ -287,7 +305,7 @@ private:
 	void displayDocument(
 		DocumentData *document,
 		const Data::CloudTheme &cloud = Data::CloudTheme(),
-		bool continueStreaming = false);
+		const StartStreaming &startStreaming = StartStreaming());
 	void displayFinished();
 	void redisplayContent();
 	void findCurrent();
@@ -303,8 +321,9 @@ private:
 	void refreshClipControllerGeometry();
 	void refreshCaptionGeometry();
 
-	bool initStreaming(bool continueStreaming = false);
-	void startStreamingPlayer();
+	bool initStreaming(
+		const StartStreaming &startStreaming = StartStreaming());
+	void startStreamingPlayer(const StartStreaming &startStreaming);
 	void initStreamingThumbnail();
 	void streamingReady(Streaming::Information &&info);
 	[[nodiscard]] bool createStreamingObjects();
@@ -316,8 +335,8 @@ private:
 	void destroyThemePreview();
 	void updateThemePreviewGeometry();
 
-	void documentUpdated(DocumentData *doc);
-	void changingMsgId(not_null<HistoryItem*> row, MsgId oldId);
+	void documentUpdated(not_null<DocumentData*> document);
+	void changingMsgId(FullMsgId newId, MsgId oldId);
 
 	[[nodiscard]] int finalContentRotation() const;
 	[[nodiscard]] QRect finalContentRect() const;
@@ -378,7 +397,7 @@ private:
 		QRect clip,
 		float64 opacity);
 
-	void updateSaveMsgState();
+	[[nodiscard]] bool isSaveMsgShown() const;
 
 	void updateOverRect(OverState state);
 	bool updateOverState(OverState newState);
@@ -390,8 +409,8 @@ private:
 	void validatePhotoImage(Image *image, bool blurred);
 	void validatePhotoCurrentImage();
 
-	[[nodiscard]] bool hasCopyRestriction() const;
-	[[nodiscard]] bool showCopyRestriction();
+	[[nodiscard]] bool hasCopyMediaRestriction() const;
+	[[nodiscard]] bool showCopyMediaRestriction();
 
 	[[nodiscard]] QSize flipSizeByRotation(QSize size) const;
 
@@ -506,6 +525,7 @@ private:
 
 	History *_migrated = nullptr;
 	History *_history = nullptr; // if conversation photos or files overview
+	MsgId _topicRootId = 0;
 	PeerData *_peer = nullptr;
 	UserData *_user = nullptr; // if user profile photos overview
 
@@ -558,13 +578,13 @@ private:
 	QPoint _touchStart;
 
 	QString _saveMsgFilename;
-	crl::time _saveMsgStarted = 0;
-	anim::value _saveMsgOpacity;
 	QRect _saveMsg;
 	QImage _saveMsgImage;
-	base::Timer _saveMsgUpdater;
 	Ui::Text::String _saveMsgText;
 	SavePhotoVideo _savePhotoVideoWhenLoaded = SavePhotoVideo::None;
+	// _saveMsgAnimation -> _saveMsgTimer -> _saveMsgAnimation.
+	Ui::Animations::Simple _saveMsgAnimation;
+	base::Timer _saveMsgTimer;
 
 	base::flat_map<OverState, crl::time> _animations;
 	base::flat_map<OverState, anim::value> _animationOpacities;
