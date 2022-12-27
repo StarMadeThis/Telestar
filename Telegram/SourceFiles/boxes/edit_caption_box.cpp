@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "apiwrap.h"
 #include "base/event_filter.h"
+#include "boxes/premium_limits_box.h"
+#include "boxes/premium_preview_box.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "chat_helpers/message_field.h"
 #include "chat_helpers/tabbed_panel.h"
@@ -22,9 +24,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
+#include "data/data_premium_limits.h"
+#include "data/stickers/data_stickers.h"
+#include "data/stickers/data_custom_emoji.h"
 #include "editor/photo_editor_layer_widget.h"
 #include "history/history_drag_area.h"
 #include "history/history_item.h"
+#include "history/history.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
@@ -32,18 +39,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "storage/localimageloader.h" // SendMediaType
 #include "storage/storage_media_prepare.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/chat/attach/attach_item_single_file_preview.h"
 #include "ui/chat/attach/attach_item_single_media_preview.h"
 #include "ui/chat/attach/attach_single_file_preview.h"
 #include "ui/chat/attach/attach_single_media_preview.h"
 #include "ui/controls/emoji_button.h"
+#include "ui/effects/scroll_content_shadow.h"
 #include "ui/image/image.h"
 #include "ui/toast/toast.h"
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
@@ -56,13 +65,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
-auto ListFromMimeData(not_null<const QMimeData*> data) {
+auto ListFromMimeData(not_null<const QMimeData*> data, bool premium) {
 	using Error = Ui::PreparedList::Error;
 	auto result = data->hasUrls()
 		? Storage::PrepareMediaList(
 			// When we edit media, we need only 1 file.
-			data->urls().mid(0, 1),
-			st::sendMediaPreviewSize)
+			base::GetMimeUrls(data).mid(0, 1),
+			st::sendMediaPreviewSize,
+			premium)
 		: Ui::PreparedList(Error::EmptyFile, QString());
 	if (result.error == Error::None) {
 		return result;
@@ -121,13 +131,10 @@ EditCaptionBox::EditCaptionBox(
 	this,
 	st::confirmCaptionArea,
 	Ui::InputField::Mode::MultiLine,
-	tr::lng_photo_caption(),
-	PrepareEditText(item)))
+	tr::lng_photo_caption()))
 , _emojiToggle(base::make_unique_q<Ui::EmojiButton>(
 	this,
-	st::boxAttachEmoji))
-, _topShadow(base::make_unique_q<Ui::FadeShadow>(this))
-, _bottomShadow(base::make_unique_q<Ui::FadeShadow>(this)) {
+	st::boxAttachEmoji)) {
 	Expects(item->media() != nullptr);
 	Expects(item->media()->allowsEditCaption());
 
@@ -148,10 +155,11 @@ void EditCaptionBox::prepare() {
 
 	setupField();
 	setupEmojiPanel();
+	setInitialText();
 
 	rebuildPreview();
 	setupEditEventHandler();
-	setupShadows();
+	SetupShadowsToScrollContent(this, _scroll, _contentHeight.events());
 
 	setupControls();
 	setupPhotoEditorEventHandler();
@@ -238,17 +246,24 @@ void EditCaptionBox::rebuildPreview() {
 }
 
 void EditCaptionBox::setupField() {
-	_field->setMaxLength(
-		_controller->session().serverConfig().captionLengthMax);
+	const auto peer = _historyItem->history()->peer;
+	const auto allow = [=](const auto&) {
+		return Data::AllowEmojiWithoutPremium(peer);
+	};
+	InitMessageFieldHandlers(
+		_controller,
+		_field.get(),
+		Window::GifPauseReason::Layer,
+		allow);
+	Ui::Emoji::SuggestionsController::Init(
+		getDelegate()->outerContainer(),
+		_field,
+		&_controller->session(),
+		{ .suggestCustomEmoji = true, .allowCustomWithoutPremium = allow });
+
 	_field->setSubmitSettings(
 		Core::App().settings().sendSubmitWay());
-	_field->setInstantReplaces(Core::App().settings().instantReplacesValue());
-	_field->setMarkdownReplacesEnabled(rpl::single(true));
-	_field->setEditLinkCallback(
-		DefaultEditLinkCallback(_controller, _field));
 	_field->setMaxHeight(st::confirmCaptionArea.heightMax);
-
-	InitSpellchecker(_controller, _field);
 
 	connect(_field, &Ui::InputField::submitted, [=] { save(); });
 	connect(_field, &Ui::InputField::cancelled, [=] { closeBox(); });
@@ -268,44 +283,20 @@ void EditCaptionBox::setupField() {
 		}
 		Unexpected("Action in MimeData hook.");
 	});
-	Ui::Emoji::SuggestionsController::Init(
-		getDelegate()->outerContainer(),
-		_field,
-		&_controller->session());
+}
 
+void EditCaptionBox::setInitialText() {
+	_field->setTextWithTags(
+		PrepareEditText(_historyItem),
+		Ui::InputField::HistoryAction::Clear);
 	auto cursor = _field->textCursor();
 	cursor.movePosition(QTextCursor::End);
 	_field->setTextCursor(cursor);
 }
 
-void EditCaptionBox::setupShadows() {
-	using namespace rpl::mappers;
-
-	const auto _topShadow = Ui::CreateChild<Ui::FadeShadow>(this);
-	const auto _bottomShadow = Ui::CreateChild<Ui::FadeShadow>(this);
-	_scroll->geometryValue(
-	) | rpl::start_with_next([=](const QRect &geometry) {
-		_topShadow->resizeToWidth(geometry.width());
-		_topShadow->move(
-			geometry.x(),
-			geometry.y());
-		_bottomShadow->resizeToWidth(geometry.width());
-		_bottomShadow->move(
-			geometry.x(),
-			geometry.y() + geometry.height() - st::lineWidth);
-	}, _topShadow->lifetime());
-
-	_topShadow->toggleOn(_scroll->scrollTopValue() | rpl::map(_1 > 0));
-	_bottomShadow->toggleOn(rpl::combine(
-		_scroll->scrollTopValue(),
-		_scroll->heightValue(),
-		_contentHeight.events(),
-		_1 + _2 < _3));
-}
-
 void EditCaptionBox::setupControls() {
 	auto hintLabelToggleOn = _previewRebuilds.events_starting_with(
-		rpl::empty_value()
+		{}
 	) | rpl::map([=] {
 		return _controller->session().settings().photoEditorHintShown()
 			? _isPhoto
@@ -330,9 +321,7 @@ void EditCaptionBox::setupControls() {
 			st::defaultBoxCheckbox),
 		st::editMediaCheckboxMargins)
 	)->toggleOn(
-		_previewRebuilds.events_starting_with(
-			rpl::empty_value()
-		) | rpl::map([=] {
+		_previewRebuilds.events_starting_with({}) | rpl::map([=] {
 			return _isPhoto
 				&& CanBeCompressed(_albumType)
 				&& !_preparedList.files.empty();
@@ -347,9 +336,10 @@ void EditCaptionBox::setupControls() {
 }
 
 void EditCaptionBox::setupEditEventHandler() {
+	const auto toastParent = Ui::BoxShow(this).toastParent();
 	const auto callback = [=](FileDialog::OpenResult &&result) {
-		auto showError = [](tr::phrase<> t) {
-			Ui::Toast::Show(t(tr::now));
+		auto showError = [toastParent](tr::phrase<> t) {
+			Ui::Toast::Show(toastParent, t(tr::now));
 		};
 
 		const auto checkResult = [=](const Ui::PreparedList &list) {
@@ -368,11 +358,13 @@ void EditCaptionBox::setupEditEventHandler() {
 			}
 			return true;
 		};
+		const auto premium = _controller->session().premium();
 		auto list = Storage::PreparedFileFromFilesDialog(
 			std::move(result),
 			checkResult,
 			showError,
-			st::sendMediaPreviewSize);
+			st::sendMediaPreviewSize,
+			premium);
 
 		if (list) {
 			setPreparedList(std::move(*list));
@@ -408,9 +400,14 @@ void EditCaptionBox::setupPhotoEditorEventHandler() {
 			controller->session().settings().incrementPhotoEditorHintShown();
 			controller->session().saveSettings();
 		};
+		const auto clearError = [=] {
+			_error = QString();
+			update();
+		};
 		const auto previewWidth = st::sendMediaPreviewSize;
 		if (!_preparedList.files.empty()) {
 			increment();
+			clearError();
 			Editor::OpenWithPreparedFile(
 				this,
 				controller,
@@ -423,6 +420,7 @@ void EditCaptionBox::setupPhotoEditorEventHandler() {
 				return;
 			}
 			increment();
+			clearError();
 			auto callback = [=](const Editor::PhotoModifications &mods) {
 				if (!mods || !_photoMedia) {
 					return;
@@ -491,21 +489,37 @@ void EditCaptionBox::setupDragArea() {
 
 void EditCaptionBox::setupEmojiPanel() {
 	const auto container = getDelegate()->outerContainer();
+	using Selector = ChatHelpers::TabbedSelector;
 	_emojiPanel = base::make_unique_q<ChatHelpers::TabbedPanel>(
 		container,
 		_controller,
-		object_ptr<ChatHelpers::TabbedSelector>(
+		object_ptr<Selector>(
 			nullptr,
 			_controller,
-			ChatHelpers::TabbedSelector::Mode::EmojiOnly));
+			Window::GifPauseReason::Layer,
+			Selector::Mode::EmojiOnly));
 	_emojiPanel->setDesiredHeightValues(
 		1.,
 		st::emojiPanMinHeight / 2,
 		st::emojiPanMinHeight);
 	_emojiPanel->hide();
+	_emojiPanel->selector()->setCurrentPeer(_historyItem->history()->peer);
 	_emojiPanel->selector()->emojiChosen(
-	) | rpl::start_with_next([=](EmojiPtr emoji) {
-		Ui::InsertEmojiAtCursor(_field->textCursor(), emoji);
+	) | rpl::start_with_next([=](ChatHelpers::EmojiChosen data) {
+		Ui::InsertEmojiAtCursor(_field->textCursor(), data.emoji);
+	}, lifetime());
+	_emojiPanel->selector()->customEmojiChosen(
+	) | rpl::start_with_next([=](ChatHelpers::FileChosen data) {
+		const auto info = data.document->sticker();
+		if (info
+			&& info->setType == Data::StickersType::Emoji
+			&& !_controller->session().premium()) {
+			ShowPremiumPreviewBox(
+				_controller,
+				PremiumPreview::AnimatedEmoji);
+		} else {
+			Data::InsertCustomEmoji(_field.get(), data.document);
+		}
 	}, lifetime());
 
 	const auto filterCallback = [=](not_null<QEvent*> event) {
@@ -531,7 +545,7 @@ void EditCaptionBox::emojiFilterForGeometry(not_null<QEvent*> event) {
 
 void EditCaptionBox::updateEmojiPanelGeometry() {
 	const auto parent = _emojiPanel->parentWidget();
-	const auto global = _emojiToggle->mapToGlobal(QPoint());
+	const auto global = _emojiToggle->mapToGlobal({ 0, 0 });
 	const auto local = parent->mapFromGlobal(global);
 	_emojiPanel->moveBottomRight(
 		local.y(),
@@ -539,7 +553,8 @@ void EditCaptionBox::updateEmojiPanelGeometry() {
 }
 
 bool EditCaptionBox::fileFromClipboard(not_null<const QMimeData*> data) {
-	return setPreparedList(ListFromMimeData(data));
+	const auto premium = _controller->session().premium();
+	return setPreparedList(ListFromMimeData(data, premium));
 }
 
 bool EditCaptionBox::setPreparedList(Ui::PreparedList &&list) {
@@ -561,7 +576,9 @@ bool EditCaptionBox::setPreparedList(Ui::PreparedList &&list) {
 		}
 	}
 	if (invalidForAlbum) {
-		Ui::Toast::Show(tr::lng_edit_media_album_error(tr::now));
+		Ui::Toast::Show(
+			Ui::BoxShow(this).toastParent(),
+			tr::lng_edit_media_album_error(tr::now));
 		return false;
 	}
 	_preparedList = std::move(list);
@@ -578,6 +595,7 @@ void EditCaptionBox::captionResized() {
 
 void EditCaptionBox::updateBoxSize() {
 	auto footerHeight = 0;
+	footerHeight += st::normalFont->height + errorTopSkip();
 	if (_field) {
 		footerHeight += st::boxPhotoCaptionSkip + _field->height();
 	}
@@ -611,8 +629,24 @@ void EditCaptionBox::paintEvent(QPaintEvent *e) {
 void EditCaptionBox::resizeEvent(QResizeEvent *e) {
 	BoxContent::resizeEvent(e);
 
+	const auto errorHeight = st::normalFont->height + errorTopSkip();
 	auto bottom = height();
+	{
+		const auto resultScrollHeight = bottom
+			- _field->height()
+			- st::boxPhotoCaptionSkip
+			- (_controls->isHidden() ? 0 : _controls->heightNoMargins())
+			- st::boxPhotoPadding.top()
+			- errorHeight;
+		const auto minThumbH = st::sendBoxAlbumGroupSize.height()
+			+ st::sendBoxAlbumGroupSkipTop * 2;
+		const auto diff = resultScrollHeight - minThumbH;
+		if (diff < 0) {
+			bottom -= diff;
+		}
+	}
 
+	bottom -= errorHeight;
 	_field->resize(st::sendMediaPreviewSize, _field->height());
 	_field->moveToLeft(
 		st::boxPhotoPadding.left(),
@@ -645,6 +679,17 @@ void EditCaptionBox::setInnerFocus() {
 	_field->setFocusFast();
 }
 
+bool EditCaptionBox::validateLength(const QString &text) const {
+	const auto session = &_controller->session();
+	const auto limit = Data::PremiumLimits(session).captionLengthCurrent();
+	const auto remove = int(text.size()) - limit;
+	if (remove <= 0) {
+		return true;
+	}
+	_controller->show(Box(CaptionLimitReachedBox, session, remove));
+	return false;
+}
+
 void EditCaptionBox::save() {
 	if (_saveRequestId) {
 		return;
@@ -659,6 +704,9 @@ void EditCaptionBox::save() {
 	}
 
 	const auto textWithTags = _field->getTextWithAppliedMarkdown();
+	if (!validateLength(textWithTags.text)) {
+		return;
+	}
 	const auto sending = TextWithEntities{
 		textWithTags.text,
 		TextUtilities::ConvertTextTagsToEntities(textWithTags.tags)
@@ -668,6 +716,13 @@ void EditCaptionBox::save() {
 	options.scheduled = item->isScheduled() ? item->date() : 0;
 
 	if (!_preparedList.files.empty()) {
+		if ((_albumType != Ui::AlbumType::None)
+				&& !_preparedList.files.front().canBeInAlbumType(
+					_albumType)) {
+			_error = tr::lng_edit_media_album_error(tr::now);
+			update();
+			return;
+		}
 		auto action = Api::SendAction(item->history(), options);
 		action.replaceMediaOf = item->fullId().msg;
 
@@ -684,20 +739,19 @@ void EditCaptionBox::save() {
 		return;
 	}
 
-	const auto done = crl::guard(this, [=](const MTPUpdates &updates) {
+	const auto done = crl::guard(this, [=] {
 		_saveRequestId = 0;
 		closeBox();
 	});
 
-	const auto fail = crl::guard(this, [=](const MTP::Error &error) {
+	const auto fail = crl::guard(this, [=](const QString &error) {
 		_saveRequestId = 0;
-		const auto &type = error.type();
-		if (ranges::contains(Api::kDefaultEditMessagesErrors, type)) {
+		if (ranges::contains(Api::kDefaultEditMessagesErrors, error)) {
 			_error = tr::lng_edit_error(tr::now);
 			update();
-		} else if (type == u"MESSAGE_NOT_MODIFIED"_q) {
+		} else if (error == u"MESSAGE_NOT_MODIFIED"_q) {
 			closeBox();
-		} else if (type == u"MESSAGE_EMPTY"_q) {
+		} else if (error == u"MESSAGE_EMPTY"_q) {
 			_field->setFocus();
 			_field->showError();
 			update();

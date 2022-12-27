@@ -7,11 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/launcher.h"
 
-#include "kotato/kotato_settings.h"
-#include "kotato/kotato_version.h"
 #include "platform/platform_launcher.h"
 #include "platform/platform_specific.h"
-#include "platform/linux/linux_desktop_environment.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/base_platform_file_utilities.h"
 #include "ui/main_queue_processor.h"
@@ -25,9 +22,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Core {
 namespace {
-
-constexpr auto kApiIdVarName = "KTGDESKTOP_API_ID"_cs;
-constexpr auto kApiHashVarName = "KTGDESKTOP_API_HASH"_cs;
 
 uint64 InstallationTag = 0;
 
@@ -67,7 +61,9 @@ FilteredCommandLineArguments::FilteredCommandLineArguments(
 #endif // !Q_OS_WIN
 	}
 #elif defined Q_OS_UNIX
-	if (Platform::DesktopEnvironment::IsGnome() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+	if (QFile::exists(cWorkingDir() + u"tdata/nowayland"_q)
+		&& qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+		LOG(("Wayland: Disable on old installations"));
 		pushArgument("-platform");
 		pushArgument("xcb;wayland");
 	}
@@ -91,7 +87,7 @@ void FilteredCommandLineArguments::pushArgument(const char *text) {
 }
 
 QString DebugModeSettingPath() {
-	return cWorkingDir() + qsl("tdata/withdebug");
+	return cWorkingDir() + u"tdata/withdebug"_q;
 }
 
 void WriteDebugModeSetting() {
@@ -117,7 +113,7 @@ void ComputeDebugMode() {
 }
 
 void ComputeExternalUpdater() {
-	QFile file(qsl("/etc/kotatogram-desktop/externalupdater"));
+	QFile file(u"/etc/tdesktop/externalupdater"_q);
 
 	if (file.exists() && file.open(QIODevice::ReadOnly)) {
 		QTextStream fileStream(&file);
@@ -133,13 +129,13 @@ void ComputeExternalUpdater() {
 }
 
 void ComputeFreeType() {
-	if (QFile::exists(cWorkingDir() + qsl("tdata/withfreetype"))) {
+	if (QFile::exists(cWorkingDir() + u"tdata/withfreetype"_q)) {
 		cSetUseFreeType(true);
 	}
 }
 
 QString InstallBetaVersionsSettingPath() {
-	return cWorkingDir() + qsl("tdata/devversion");
+	return cWorkingDir() + u"tdata/devversion"_q;
 }
 
 void WriteInstallBetaVersionsSetting() {
@@ -158,14 +154,14 @@ void ComputeInstallBetaVersions() {
 		if (f.open(QIODevice::ReadOnly)) {
 			cSetInstallBetaVersion(f.read(1) != "0");
 		}
-	} else if (AppKotatoBetaVersion) {
+	} else if (AppBetaVersion) {
 		WriteInstallBetaVersionsSetting();
 	}
 }
 
 void ComputeInstallationTag() {
 	InstallationTag = 0;
-	auto file = QFile(cWorkingDir() + qsl("tdata/usertag"));
+	auto file = QFile(cWorkingDir() + u"tdata/usertag"_q);
 	if (file.open(QIODevice::ReadOnly)) {
 		const auto result = file.read(
 			reinterpret_cast<char*>(&InstallationTag),
@@ -193,7 +189,7 @@ void ComputeInstallationTag() {
 
 bool MoveLegacyAlphaFolder(const QString &folder, const QString &file) {
 	const auto was = cExeDir() + folder;
-	const auto now = cExeDir() + qsl("TelegramForcePortable");
+	const auto now = cExeDir() + u"TelegramForcePortable"_q;
 	if (QDir(was).exists() && !QDir(now).exists()) {
 		const auto oldFile = was + "/tdata/" + file;
 		const auto newFile = was + "/tdata/alpha";
@@ -214,8 +210,8 @@ bool MoveLegacyAlphaFolder(const QString &folder, const QString &file) {
 }
 
 bool MoveLegacyAlphaFolder() {
-	if (!MoveLegacyAlphaFolder(qsl("TelegramAlpha_data"), qsl("alpha"))
-		|| !MoveLegacyAlphaFolder(qsl("TelegramBeta_data"), qsl("beta"))) {
+	if (!MoveLegacyAlphaFolder(u"TelegramAlpha_data"_q, u"alpha"_q)
+		|| !MoveLegacyAlphaFolder(u"TelegramBeta_data"_q, u"beta"_q)) {
 		return false;
 	}
 	return true;
@@ -226,16 +222,13 @@ bool CheckPortableVersionFolder() {
 		return false;
 	}
 
-	const auto portable = cExeDir() + qsl("TelegramForcePortable");
-	QFile key(portable + qsl("/tdata/alpha"));
+	const auto portable = cExeDir() + u"TelegramForcePortable"_q;
+	QFile key(portable + u"/tdata/alpha"_q);
 	if (cAlphaVersion()) {
-		/*
 		Assert(*AlphaPrivateKey != 0);
-		*/
 
 		cForceWorkingDir(portable + '/');
-		QDir().mkpath(cWorkingDir() + qstr("tdata"));
-		/*
+		QDir().mkpath(cWorkingDir() + u"tdata"_q);
 		cSetAlphaPrivateKey(QByteArray(AlphaPrivateKey));
 		if (!key.open(QIODevice::WriteOnly)) {
 			LOG(("FATAL: Could not open '%1' for writing private key!"
@@ -245,7 +238,6 @@ bool CheckPortableVersionFolder() {
 		QDataStream dataStream(&key);
 		dataStream.setVersion(QDataStream::Qt_5_3);
 		dataStream << quint64(cRealAlphaVersion()) << cAlphaPrivateKey();
-		*/
 		return true;
 	}
 	if (!QDir(portable).exists()) {
@@ -301,7 +293,7 @@ void Launcher::init() {
 	prepareSettings();
 	initQtMessageLogging();
 
-	QApplication::setApplicationName(qsl("KotatogramDesktop"));
+	QApplication::setApplicationName(u"TelegramDesktop"_q);
 	QApplication::setAttribute(Qt::AA_DisableHighDpiScaling, true);
 	QApplication::setHighDpiScaleFactorRoundingPolicy(
 		Qt::HighDpiScaleFactorRoundingPolicy::Floor);
@@ -320,9 +312,6 @@ void Launcher::init() {
 }
 
 int Launcher::exec() {
-	// This should be called before init to load default
-	// values and set some options that are not stored in JSON.
-	Kotato::JsonSettings::Start();
 	init();
 
 	if (cLaunchMode() == LaunchModeFixPrevious) {
@@ -334,18 +323,10 @@ int Launcher::exec() {
 	// Must be started before Platform is started.
 	Logs::start(this);
 	base::options::init(cWorkingDir() + "tdata/experimental_options.json");
-	Kotato::JsonSettings::Load();
-
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	if (::Kotato::JsonSettings::GetBool("qt_scale")) {
-		QApplication::setAttribute(Qt::AA_DisableHighDpiScaling, false);
-		QApplication::setAttribute(Qt::AA_EnableHighDpiScaling, true);
-	}
-#endif
 
 	if (Logs::DebugEnabled()) {
 		const auto openalLogPath = QDir::toNativeSeparators(
-			cWorkingDir() + qsl("DebugLogs/last_openal_log.txt"));
+			cWorkingDir() + u"DebugLogs/last_openal_log.txt"_q);
 
 		qputenv("ALSOFT_LOGLEVEL", "3");
 
@@ -362,32 +343,22 @@ int Launcher::exec() {
 
 	// Must be started before Sandbox is created.
 	Platform::start();
-
-	if (::Kotato::JsonSettings::GetBool("api_use_env")
-		&& qEnvironmentVariableIsSet(kApiIdVarName.utf8().constData())
-		&& qEnvironmentVariableIsSet(kApiHashVarName.utf8().constData())) {
-		::Kotato::JsonSettings::Set("api_id", qgetenv(kApiIdVarName.utf8().constData()).toInt());
-		::Kotato::JsonSettings::Set("api_hash", QString::fromLatin1(qgetenv(kApiHashVarName.utf8().constData())));
-		::Kotato::JsonSettings::Set("api_start_params", false);
-	}
-
 	auto result = executeApplication();
 
-	DEBUG_LOG(("Kotatogram finished, result: %1").arg(result));
+	DEBUG_LOG(("Telegram finished, result: %1").arg(result));
 
 	if (!UpdaterDisabled() && cRestartingUpdate()) {
 		DEBUG_LOG(("Sandbox Info: executing updater to install update."));
 		if (!launchUpdater(UpdaterLaunch::PerformUpdate)) {
-			base::Platform::DeleteDirectory(cWorkingDir() + qsl("tupdates/temp"));
+			base::Platform::DeleteDirectory(cWorkingDir() + u"tupdates/temp"_q);
 		}
 	} else if (cRestarting()) {
-		DEBUG_LOG(("Sandbox Info: executing Kotatogram because of restart."));
+		DEBUG_LOG(("Sandbox Info: executing Telegram because of restart."));
 		launchUpdater(UpdaterLaunch::JustRelaunch);
 	}
 
 	CrashReports::Finish();
 	Platform::finish();
-	Kotato::JsonSettings::Finish();
 	Logs::finish();
 
 	return result;
@@ -510,9 +481,6 @@ void Launcher::processArguments() {
 		{ "-workdir"        , KeyFormat::OneValue },
 		{ "--"              , KeyFormat::OneValue },
 		{ "-scale"          , KeyFormat::OneValue },
-		{ "-no-env-api"     , KeyFormat::NoValues },
-		{ "-api-id"         , KeyFormat::OneValue },
-		{ "-api-hash"       , KeyFormat::OneValue },
 	};
 	auto parseResult = QMap<QByteArray, QStringList>();
 	auto parsingKey = QByteArray();
@@ -562,19 +530,11 @@ void Launcher::processArguments() {
 
 	const auto scaleKey = parseResult.value("-scale", {});
 	if (scaleKey.size() > 0) {
+		using namespace style;
 		const auto value = scaleKey[0].toInt();
-		gConfigScale = ((value < 75) || (value > 300))
-			? style::kScaleAuto
+		gConfigScale = ((value < kScaleMin) || (value > kScaleMax))
+			? kScaleAuto
 			: value;
-	}
-
-	::Kotato::JsonSettings::Set("api_use_env", !parseResult.contains("-no-env-api"));
-	auto customApiId = parseResult.value("-api-id", {}).join(QString()).toInt();
-	auto customApiHash = parseResult.value("-api-hash", {}).join(QString());
-	if (customApiId > 0 && !customApiHash.isEmpty()) {
-		::Kotato::JsonSettings::Set("api_id", customApiId);
-		::Kotato::JsonSettings::Set("api_hash", customApiHash);
-		::Kotato::JsonSettings::Set("api_start_params", true);
 	}
 }
 

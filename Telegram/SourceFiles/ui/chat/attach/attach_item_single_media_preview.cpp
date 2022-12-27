@@ -82,9 +82,7 @@ ItemSingleMediaPreview::ItemSingleMediaPreview(
 		}
 	};
 
-	rpl::single(
-		rpl::empty_value()
-	) | rpl::then(
+	rpl::single(rpl::empty) | rpl::then(
 		session->downloaderTaskFinished()
 	) | rpl::start_with_next([=] {
 		const auto computed = computeThumbInfo();
@@ -196,7 +194,7 @@ bool ItemSingleMediaPreview::drawBackground() const {
 	return true; // A sticker can't be here.
 }
 
-bool ItemSingleMediaPreview::tryPaintAnimation(Painter &p) {
+bool ItemSingleMediaPreview::tryPaintAnimation(QPainter &p) {
 	checkStreamedIsStarted();
 	if (_streamed
 		&& _streamed->player().ready()

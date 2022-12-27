@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
+#include "ui/round_rect.h"
 
 namespace Ui {
 
@@ -18,7 +19,7 @@ class PanelAnimation;
 
 class FilterIconPanel final : public Ui::RpWidget {
 public:
-	FilterIconPanel(QWidget *parent, bool isLocal);
+	FilterIconPanel(QWidget *parent);
 	~FilterIconPanel();
 
 	void hideFast();
@@ -69,6 +70,7 @@ private:
 
 	const not_null<Ui::RpWidget*> _inner;
 	rpl::event_stream<FilterIcon> _chosen;
+	Ui::RoundRect _innerBg;
 
 	int _selected = -1;
 	int _pressed = -1;
@@ -80,7 +82,6 @@ private:
 	QPixmap _cache;
 	Ui::Animations::Simple _a_opacity;
 	base::Timer _hideTimer;
-	bool _isLocal = false;
 
 };
 

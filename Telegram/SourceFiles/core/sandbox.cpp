@@ -7,13 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/sandbox.h"
 
-#include "kotato/kotato_settings.h"
 #include "base/platform/base_platform_info.h"
 #include "platform/platform_specific.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "storage/localstorage.h"
 #include "window/notifications_manager.h"
+#include "window/window_controller.h"
 #include "core/crash_reports.h"
 #include "core/crash_report_window.h"
 #include "core/application.h"
@@ -32,7 +32,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QLockFile>
 #include <QtGui/QSessionManager>
 #include <QtGui/QScreen>
-#include <qpa/qplatformscreen.h>
 
 namespace Core {
 namespace {
@@ -87,11 +86,6 @@ Sandbox::Sandbox(
 	char **argv)
 : QApplication(argc, argv)
 , _mainThreadId(QThread::currentThreadId())
-, _handleObservables([=] {
-	if (_application) {
-		_application->call_handleObservables();
-	}
-})
 , _launcher(launcher) {
 	setQuitOnLastWindowClosed(false);
 }
@@ -203,10 +197,6 @@ void Sandbox::launchApplication() {
 		}
 		setupScreenScale();
 
-		base::InitObservables([] {
-			Instance()._handleObservables.call();
-		});
-
 		_application = std::make_unique<Application>(_launcher);
 
 		// Ideally this should go to constructor.
@@ -220,11 +210,7 @@ void Sandbox::launchApplication() {
 }
 
 void Sandbox::setupScreenScale() {
-	const auto processDpi = [](const QDpi &dpi) {
-		return (dpi.first + dpi.second) * qreal(0.5);
-	};
-	const auto dpi = processDpi(
-		Sandbox::primaryScreen()->handle()->logicalDpi());
+	const auto dpi = Sandbox::primaryScreen()->logicalDotsPerInch();
 	LOG(("Primary screen DPI: %1").arg(dpi));
 	if (dpi <= 108) {
 		cSetScreenScale(100); // 100%:  96 DPI (0-108)
@@ -241,11 +227,7 @@ void Sandbox::setupScreenScale() {
 	}
 
 	const auto ratio = devicePixelRatio();
-	if (ratio > 1.
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-		|| ::Kotato::JsonSettings::GetBool("qt_scale")
-#endif
-		) {
+	if (ratio > 1.) {
 		if (!Platform::IsMac() || (ratio != 2.)) {
 			LOG(("Found non-trivial Device Pixel Ratio: %1").arg(ratio));
 			LOG(("Environmental variables: QT_DEVICE_PIXEL_RATIO='%1'").arg(qEnvironmentVariable("QT_DEVICE_PIXEL_RATIO")));
@@ -253,12 +235,8 @@ void Sandbox::setupScreenScale() {
 			LOG(("Environmental variables: QT_AUTO_SCREEN_SCALE_FACTOR='%1'").arg(qEnvironmentVariable("QT_AUTO_SCREEN_SCALE_FACTOR")));
 			LOG(("Environmental variables: QT_SCREEN_SCALE_FACTORS='%1'").arg(qEnvironmentVariable("QT_SCREEN_SCALE_FACTORS")));
 		}
-		style::SetDevicePixelRatio(int(ratio));
-		if (Platform::IsMac() && ratio == 2.
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-			&& !::Kotato::JsonSettings::GetBool("qt_scale")
-#endif
-			) {
+		style::SetDevicePixelRatio(std::ceil(ratio));
+		if (Platform::IsMac() && ratio == 2.) {
 			cSetScreenScale(110); // 110% for Retina screens by default.
 		} else {
 			cSetScreenScale(style::kScaleDefault);
@@ -286,14 +264,17 @@ void Sandbox::socketConnected() {
 	QString commands;
 	const QStringList &lst(cSendPaths());
 	for (QStringList::const_iterator i = lst.cbegin(), e = lst.cend(); i != e; ++i) {
-		commands += qsl("SEND:") + _escapeTo7bit(*i) + ';';
+		commands += u"SEND:"_q + _escapeTo7bit(*i) + ';';
+	}
+	if (qEnvironmentVariableIsSet("XDG_ACTIVATION_TOKEN")) {
+		commands += u"XDG_ACTIVATION_TOKEN:"_q + _escapeTo7bit(qEnvironmentVariable("XDG_ACTIVATION_TOKEN")) + ';';
 	}
 	if (!cStartUrl().isEmpty()) {
-		commands += qsl("OPEN:") + _escapeTo7bit(cStartUrl()) + ';';
+		commands += u"OPEN:"_q + _escapeTo7bit(cStartUrl()) + ';';
 	} else if (cQuit()) {
-		commands += qsl("CMD:quit;");
+		commands += u"CMD:quit;"_q;
 	} else {
-		commands += qsl("CMD:show;");
+		commands += u"CMD:show;"_q;
 	}
 
 	DEBUG_LOG(("Sandbox Info: writing commands %1").arg(commands));
@@ -375,12 +356,6 @@ void Sandbox::singleInstanceChecked() {
 		LOG(("App Info: Detected another instance"));
 	}
 
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-	if (!::Kotato::JsonSettings::GetBool("qt_scale")) {
-		Ui::DisableCustomScaling();
-	}
-#endif
-
 	refreshGlobalProxy();
 	if (!Logs::started() || !Logs::instanceChecked()) {
 		new NotStartedWindow();
@@ -450,15 +425,17 @@ void Sandbox::readClients() {
 			int32 from = 0, l = cmds.length();
 			for (int32 to = cmds.indexOf(QChar(';'), from); to >= from; to = (from < l) ? cmds.indexOf(QChar(';'), from) : -1) {
 				auto cmd = base::StringViewMid(cmds, from, to - from);
-				if (cmd.startsWith(qsl("CMD:"))) {
+				if (cmd.startsWith(u"CMD:"_q)) {
 					execExternal(cmds.mid(from + 4, to - from - 4));
-					const auto response = qsl("RES:%1;").arg(QApplication::applicationPid()).toLatin1();
+					const auto response = u"RES:%1;"_q.arg(QApplication::applicationPid()).toLatin1();
 					i->first->write(response.data(), response.size());
-				} else if (cmd.startsWith(qsl("SEND:"))) {
+				} else if (cmd.startsWith(u"SEND:"_q)) {
 					if (cSendPaths().isEmpty()) {
 						toSend.append(_escapeFrom7bit(cmds.mid(from + 5, to - from - 5)));
 					}
-				} else if (cmd.startsWith(qsl("OPEN:"))) {
+				} else if (cmd.startsWith(u"XDG_ACTIVATION_TOKEN:"_q)) {
+					qputenv("XDG_ACTIVATION_TOKEN", _escapeFrom7bit(cmds.mid(from + 21, to - from - 21)).toUtf8());
+				} else if (cmd.startsWith(u"OPEN:"_q)) {
 					startUrl = _escapeFrom7bit(cmds.mid(from + 5, to - from - 5)).mid(0, 8192);
 					auto activateRequired = StartUrlRequiresActivate(startUrl);
 					if (activateRequired) {
@@ -467,7 +444,7 @@ void Sandbox::readClients() {
 					const auto responsePid = activateRequired
 						? QApplication::applicationPid()
 						: kEmptyPidForCommandResponse;
-					const auto response = qsl("RES:%1;").arg(responsePid).toLatin1();
+					const auto response = u"RES:%1;"_q.arg(responsePid).toLatin1();
 					i->first->write(response.data(), response.size());
 				} else {
 					LOG(("Sandbox Error: unknown command %1 passed in local socket").arg(cmd.toString()));
@@ -484,10 +461,8 @@ void Sandbox::readClients() {
 		paths.append(toSend);
 		cSetSendPaths(paths);
 	}
-	if (!cSendPaths().isEmpty()) {
-		if (App::wnd()) {
-			App::wnd()->sendPaths();
-		}
+	if (_application) {
+		_application->checkSendPaths();
 	}
 	if (!startUrl.isEmpty()) {
 		cSetStartUrl(startUrl);
@@ -533,6 +508,10 @@ void Sandbox::refreshGlobalProxy() {
 	} else {
 		QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 	}
+}
+
+bool Sandbox::customWorkingDir() const {
+	return _launcher->customWorkingDir();
 }
 
 uint64 Sandbox::installationTag() const {
@@ -667,8 +646,8 @@ void Sandbox::closeApplication() {
 void Sandbox::execExternal(const QString &cmd) {
 	DEBUG_LOG(("Sandbox Info: executing external command '%1'").arg(cmd));
 	if (cmd == "show") {
-		if (App::wnd()) {
-			App::wnd()->activate();
+		if (Core::IsAppLaunched() && Core::App().primaryWindow()) {
+			Core::App().primaryWindow()->activate();
 		} else if (PreLaunchWindow::instance()) {
 			PreLaunchWindow::instance()->activate();
 		}

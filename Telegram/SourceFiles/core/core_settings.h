@@ -7,10 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "base/platform/base_platform_info.h"
 #include "core/core_settings_proxy.h"
 #include "window/themes/window_themes_embedded.h"
-#include "ui/widgets/input_fields.h"
 #include "ui/chat/attach/attach_send_files_way.h"
 #include "platform/platform_notifications_manager.h"
 #include "base/flags.h"
@@ -21,6 +19,10 @@ enum class RectPart;
 namespace Ui {
 enum class InputSubmitSettings;
 } // namespace Ui
+
+namespace HistoryView {
+enum class DoubleClickQuickAction;
+} // namespace HistoryView
 
 namespace Window {
 enum class Column;
@@ -42,8 +44,6 @@ enum class OrderMode;
 namespace Core {
 
 struct WindowPosition {
-	WindowPosition() = default;
-
 	int32 moncrc = 0;
 	int maximized = 0;
 	int scale = 0;
@@ -51,6 +51,30 @@ struct WindowPosition {
 	int y = 0;
 	int w = 0;
 	int h = 0;
+};
+
+constexpr auto kRecentEmojiLimit = 42;
+
+struct RecentEmojiDocument {
+	DocumentId id = 0;
+	bool test = false;
+
+	friend inline auto operator<=>(
+		RecentEmojiDocument,
+		RecentEmojiDocument) = default;
+};
+
+struct RecentEmojiId {
+	std::variant<EmojiPtr, RecentEmojiDocument> data;
+
+	friend inline bool operator==(
+		RecentEmojiId,
+		RecentEmojiId) = default;
+};
+
+struct RecentEmoji {
+	RecentEmojiId id;
+	ushort rating = 0;
 };
 
 class Settings final {
@@ -358,9 +382,6 @@ public:
 	}
 	void setReplaceEmoji(bool value) {
 		_replaceEmoji = value;
-		setInstantReplaces(value
-			? Ui::InstantReplaces::Default()
-			: Ui::InstantReplaces::Custom());
 	}
 	[[nodiscard]] bool replaceEmoji() const {
 		return _replaceEmoji.current();
@@ -370,34 +391,6 @@ public:
 	}
 	[[nodiscard]] rpl::producer<bool> replaceEmojiChanges() const {
 		return _replaceEmoji.changes();
-	}
-	void setInstantReplaces(Ui::InstantReplaces replaces) {
-		_instantReplaces = replaces;
-		_instantReplacesSet = true;
-	}
-	[[nodiscard]] Ui::InstantReplaces instantReplaces() {
-		if (!_instantReplacesSet) {
-			setInstantReplaces(replaceEmoji()
-				? Ui::InstantReplaces::Default()
-				: Ui::InstantReplaces::Custom());
-		}
-		return _instantReplaces.current();
-	}
-	[[nodiscard]] rpl::producer<Ui::InstantReplaces> instantReplacesValue() {
-		if (!_instantReplacesSet) {
-			setInstantReplaces(replaceEmoji()
-				? Ui::InstantReplaces::Default()
-				: Ui::InstantReplaces::Custom());
-		}
-		return _instantReplaces.value();
-	}
-	[[nodiscard]] rpl::producer<Ui::InstantReplaces> instantReplacesChanges() {
-		if (!_instantReplacesSet) {
-			setInstantReplaces(replaceEmoji()
-				? Ui::InstantReplaces::Default()
-				: Ui::InstantReplaces::Custom());
-		}
-		return _instantReplaces.changes();
 	}
 	[[nodiscard]] bool suggestEmoji() const {
 		return _suggestEmoji;
@@ -410,6 +403,24 @@ public:
 	}
 	void setSuggestStickersByEmoji(bool value) {
 		_suggestStickersByEmoji = value;
+	}
+	[[nodiscard]] bool suggestAnimatedEmoji() const {
+		return _suggestAnimatedEmoji;
+	}
+	void setSuggestAnimatedEmoji(bool value) {
+		_suggestAnimatedEmoji = value;
+	}
+	void setCornerReaction(bool value) {
+		_cornerReaction = value;
+	}
+	[[nodiscard]] bool cornerReaction() const {
+		return _cornerReaction.current();
+	}
+	[[nodiscard]] rpl::producer<bool> cornerReactionValue() const {
+		return _cornerReaction.value();
+	}
+	[[nodiscard]] rpl::producer<bool> cornerReactionChanges() const {
+		return _cornerReaction.changes();
 	}
 
 	void setSpellcheckerEnabled(bool value) {
@@ -604,13 +615,8 @@ public:
 		return _workMode.changes();
 	}
 
-	struct RecentEmoji {
-		EmojiPtr emoji = nullptr;
-		ushort rating = 0;
-	};
 	[[nodiscard]] const std::vector<RecentEmoji> &recentEmoji() const;
-	[[nodiscard]] EmojiPack recentEmojiSection() const;
-	void incrementRecentEmoji(EmojiPtr emoji);
+	void incrementRecentEmoji(RecentEmojiId id);
 	void setLegacyRecentEmojiPreload(QVector<QPair<QString, ushort>> data);
 	[[nodiscard]] rpl::producer<> recentEmojiUpdated() const {
 		return _recentEmojiUpdated.events();
@@ -696,12 +702,30 @@ public:
 		_accountsOrder = order;
 	}
 
+	[[nodiscard]] bool hardwareAcceleratedVideo() const {
+		return _hardwareAcceleratedVideo;
+	}
+	void setHardwareAcceleratedVideo(bool value) {
+		_hardwareAcceleratedVideo = value;
+	}
+
 	void setMacWarnBeforeQuit(bool value) {
 		_macWarnBeforeQuit = value;
 	}
 	[[nodiscard]] bool macWarnBeforeQuit() const {
 		return _macWarnBeforeQuit;
 	}
+	void setChatQuickAction(HistoryView::DoubleClickQuickAction value) {
+		_chatQuickAction = value;
+	}
+	[[nodiscard]] HistoryView::DoubleClickQuickAction chatQuickAction() const {
+		return _chatQuickAction;
+	}
+
+	void setTranslateButtonEnabled(bool value);
+	[[nodiscard]] bool translateButtonEnabled() const;
+	void setSkipTranslationForLanguage(QLocale::Language language);
+	[[nodiscard]] QLocale::Language skipTranslationForLanguage() const;
 
 	[[nodiscard]] static bool ThirdColumnByDefault();
 	[[nodiscard]] static float64 DefaultDialogsWidthRatio();
@@ -726,7 +750,7 @@ private:
 	static constexpr auto kDefaultDialogsWidthRatio = 5. / 14;
 	static constexpr auto kDefaultBigDialogsWidthRatio = 0.275;
 
-	struct RecentEmojiId {
+	struct RecentEmojiPreload {
 		QString emoji;
 		ushort rating = 0;
 	};
@@ -772,10 +796,10 @@ private:
 	bool _loopAnimatedStickers = true;
 	rpl::variable<bool> _largeEmoji = true;
 	rpl::variable<bool> _replaceEmoji = true;
-	rpl::variable<Ui::InstantReplaces> _instantReplaces;
-	bool _instantReplacesSet = false;
 	bool _suggestEmoji = true;
 	bool _suggestStickersByEmoji = true;
+	bool _suggestAnimatedEmoji = true;
+	rpl::variable<bool> _cornerReaction = true;
 	rpl::variable<bool> _spellcheckerEnabled = true;
 	rpl::variable<float64> _videoPlaybackSpeed = 1.;
 	float64 _voicePlaybackSpeed = 2.;
@@ -784,7 +808,7 @@ private:
 	rpl::variable<std::vector<int>> _dictionariesEnabled;
 	rpl::variable<bool> _autoDownloadDictionaries = true;
 	rpl::variable<bool> _mainMenuAccountsShown = true;
-	mutable std::vector<RecentEmojiId> _recentEmojiPreload;
+	mutable std::vector<RecentEmojiPreload> _recentEmojiPreload;
 	mutable std::vector<RecentEmoji> _recentEmoji;
 	base::flat_map<QString, uint8> _emojiVariants;
 	rpl::event_stream<> _recentEmojiUpdated;
@@ -797,7 +821,7 @@ private:
 	rpl::variable<float64> _dialogsWidthRatio; // per-window
 	rpl::variable<int> _thirdColumnWidth = kDefaultThirdColumnWidth; // p-w
 	bool _notifyFromAll = true;
-	rpl::variable<bool> _nativeWindowFrame = Platform::IsLinux();
+	rpl::variable<bool> _nativeWindowFrame = false;
 	rpl::variable<std::optional<bool>> _systemDarkMode = std::nullopt;
 	rpl::variable<bool> _systemDarkModeEnabled = false;
 	WindowPosition _windowPosition; // per-window
@@ -810,6 +834,14 @@ private:
 	rpl::variable<Media::Player::OrderMode> _playerOrderMode;
 	bool _macWarnBeforeQuit = true;
 	std::vector<uint64> _accountsOrder;
+#ifdef Q_OS_MAC
+	bool _hardwareAcceleratedVideo = true;
+#else // Q_OS_MAC
+	bool _hardwareAcceleratedVideo = false;
+#endif // Q_OS_MAC
+	HistoryView::DoubleClickQuickAction _chatQuickAction =
+		HistoryView::DoubleClickQuickAction();
+	int _skipTranslationForLanguage = -int(QLocale::English);
 
 	bool _tabbedReplacedWithInfo = false; // per-window
 	rpl::event_stream<bool> _tabbedReplacedWithInfoValue; // per-window

@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/edit_peer_common.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/widgets/labels.h"
+#include "ui/widgets/checkbox.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_utilities.h"
@@ -56,7 +57,7 @@ void SendRequest(
 			first,
 			last,
 			user->nameOrPhone,
-			user->username);
+			user->username());
 		user->session().api().applyUpdates(result);
 		if (const auto settings = user->settings()) {
 			const auto flags = PeerSetting::AddContact
@@ -65,13 +66,12 @@ void SendRequest(
 			user->setSettings(*settings & ~flags);
 		}
 		if (box) {
+			if (!wasContact) {
+				Ui::Toast::Show(
+					Ui::BoxShow(box.data()).toastParent(),
+					tr::lng_new_contact_add_done(tr::now, lt_user, first));
+			}
 			box->closeBox();
-		}
-		if (!wasContact) {
-			Ui::Toast::Show(tr::lng_new_contact_add_done(
-				tr::now,
-				lt_user,
-				first));
 		}
 	}).send();
 }
@@ -246,7 +246,7 @@ void Controller::setupSharePhoneNumber() {
 		object_ptr<Ui::Checkbox>(
 			_box,
 			tr::lng_contact_share_phone(tr::now),
-			false,
+			true,
 			st::defaultBoxCheckbox),
 		st::addContactWarningMargin);
 	_box->addRow(

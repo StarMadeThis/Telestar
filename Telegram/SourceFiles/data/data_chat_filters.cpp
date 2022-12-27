@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_chat_filters.h"
 
-#include "kotato/kotato_settings.h"
 #include "history/history.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
@@ -17,11 +16,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_folder.h"
 #include "data/data_histories.h"
 #include "dialogs/dialogs_main_list.h"
+#include "history/history.h"
 #include "history/history_unread_things.h"
 #include "ui/ui_utility.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
-#include "mainwidget.h"
+#include "main/main_app_config.h"
 #include "apiwrap.h"
 
 namespace Data {
@@ -30,201 +30,8 @@ namespace {
 constexpr auto kRefreshSuggestedTimeout = 7200 * crl::time(1000);
 constexpr auto kLoadExceptionsAfter = 100;
 constexpr auto kLoadExceptionsPerRequest = 100;
-constexpr auto kFiltersLimit = 10;
-
-const std::map<ChatFilter::Flag, QString> LocalFolderSettingsFlags {
-	{ ChatFilter::Flag::Contacts,    qsl("include_contacts") },
-	{ ChatFilter::Flag::NonContacts, qsl("include_non_contacts") },
-	{ ChatFilter::Flag::Groups,      qsl("include_groups") },
-	{ ChatFilter::Flag::Channels,    qsl("include_channels") },
-	{ ChatFilter::Flag::Bots,        qsl("include_bots") },
-	{ ChatFilter::Flag::NoMuted,     qsl("exclude_muted") },
-	{ ChatFilter::Flag::NoRead,      qsl("exclude_read") },
-	{ ChatFilter::Flag::NoArchived,  qsl("exclude_archived") },
-	{ ChatFilter::Flag::Owned,       qsl("exclude_not_owned") },
-	{ ChatFilter::Flag::Admin,       qsl("exclude_not_admin") },
-	{ ChatFilter::Flag::NotOwned,    qsl("exclude_owned") },
-	{ ChatFilter::Flag::NotAdmin,    qsl("exclude_admin") },
-	{ ChatFilter::Flag::Recent,      qsl("exclude_non_recent") },
-	{ ChatFilter::Flag::NoFilter,    qsl("exclude_filtered") },
-};
-
-bool ReadOption(QJsonObject obj, QString key, std::function<void(QJsonValue)> callback) {
-	const auto it = obj.constFind(key);
-	if (it == obj.constEnd()) {
-		return false;
-	}
-	callback(*it);
-	return true;
-}
-
-bool ReadStringOption(QJsonObject obj, QString key, std::function<void(QString)> callback) {
-	auto readResult = false;
-	auto readValueResult = ReadOption(obj, key, [&](QJsonValue v) {
-		if (v.isString()) {
-			callback(v.toString());
-			readResult = true;
-		}
-	});
-	return (readValueResult && readResult);
-}
-
-bool ReadIntOption(QJsonObject obj, QString key, std::function<void(int)> callback) {
-	auto readResult = false;
-	auto readValueResult = ReadOption(obj, key, [&](QJsonValue v) {
-		if (v.isDouble()) {
-			callback(v.toInt());
-			readResult = true;
-		}
-	});
-	return (readValueResult && readResult);
-}
-
-bool ReadArrayOption(QJsonObject obj, QString key, std::function<void(QJsonArray)> callback) {
-	auto readResult = false;
-	auto readValueResult = ReadOption(obj, key, [&](QJsonValue v) {
-		if (v.isArray()) {
-			callback(v.toArray());
-			readResult = true;
-		}
-	});
-	return (readValueResult && readResult);
-}
-
 
 } // namespace
-
-QJsonObject LocalFolder::toJson() {
-	auto folderObject = QJsonObject();
-
-	folderObject.insert(qsl("id"), id);
-	folderObject.insert(qsl("order"), cloudOrder);
-	folderObject.insert(qsl("name"), name);
-	folderObject.insert(qsl("emoticon"), emoticon);
-
-	for (const auto &[flag, option] : LocalFolderSettingsFlags) {
-		if (flags & flag) {
-			folderObject.insert(option, true);
-		}
-	}
-
-	const auto peerToStr = [](uint64 peer) {
-		auto peerId = PeerId(peer);
-		return (peerIsChannel(peerId))
-			? qsl("channel")
-			: (peerIsChat(peerId))
-			? qsl("chat")
-			: qsl("user");
-	};
-
-	const auto peerToLocalBare = [](uint64 peer) {
-		auto peerId = PeerId(peer);
-		return QString::number((peerIsChannel(peerId))
-			? peerToChannel(peerId).bare
-			: (peerIsChat(peerId))
-			? peerToChat(peerId).bare
-			: peerToUser(peerId).bare);
-	};
-
-	const auto fillChatsArray = [peerToStr, peerToLocalBare] (const std::vector<uint64> &chats) -> QJsonArray {
-		auto result = QJsonArray();
-		for (auto peer : chats) {
-			auto peerObj = QJsonObject();
-			peerObj.insert(qsl("type"), peerToStr(peer));
-			peerObj.insert(qsl("id"), peerToLocalBare(peer));
-			result << peerObj;
-		}
-		return result;
-	};
-
-	folderObject.insert(qsl("never"), fillChatsArray(never));
-	folderObject.insert(qsl("pinned"), fillChatsArray(pinned));
-	folderObject.insert(qsl("always"), fillChatsArray(always));
-
-	return folderObject;
-}
-
-LocalFolder MakeLocalFolder(const QJsonObject &obj) {
-	auto result = LocalFolder();
-
-	ReadIntOption(obj, "id", [&](auto v) {
-		result.id = v;
-	});
-
-	ReadIntOption(obj, "order", [&](auto v) {
-		result.cloudOrder = v;
-	});
-
-	ReadStringOption(obj, "name", [&](auto v) {
-		result.name = v;
-	});
-
-	ReadStringOption(obj, "emoticon", [&](auto v) {
-		result.emoticon = v;
-	});
-
-	for (const auto &[flag, option] : LocalFolderSettingsFlags) {
-		const auto it = obj.constFind(option);
-		if (it != obj.constEnd()) {
-			const auto v = *it;
-			if (v.isBool() && v.toBool()) {
-				result.flags |= flag;
-			}
-		}
-	}
-
-	const auto readChatsArray = [obj] (const QString &key, std::vector<uint64> &chats) {
-		ReadArrayOption(obj, key, [&](auto a) {
-			for (auto i = a.constBegin(), e = a.constEnd(); i != e; ++i) {
-				if (!(*i).isObject()) {
-					continue;
-				}
-
-				auto peer = (*i).toObject();
-				BareId peerId = 0;
-
-				auto isPeerIdRead = ReadIntOption(peer, "id", [&](auto v) {
-					peerId = v;
-				});
-
-				if (!isPeerIdRead) {
-					isPeerIdRead = ReadStringOption(peer, "id", [&](auto v) {
-						peerId = static_cast<BareId>(v.toLongLong());
-					});
-				}
-
-				if (peerId == 0 || !isPeerIdRead) {
-					continue;
-				}
-
-				auto isPeerTypeRead = ReadStringOption(peer, "type", [&](auto v) {
-					peerId = (QString::compare(v.toLower(), "channel") == 0)
-						? peerFromChannel(ChannelId(peerId)).value
-						: (QString::compare(v.toLower(), "chat") == 0)
-						? peerFromChat(ChatId(peerId)).value
-						: peerFromUser(UserId(peerId)).value;
-				});
-
-				if (!isPeerTypeRead) {
-					peerId = peerFromUser(UserId(peerId)).value;
-				}
-
-				chats.push_back(peerId);
-			}
-		});
-	};
-
-	readChatsArray(qsl("never"), result.never);
-	readChatsArray(qsl("pinned"), result.pinned);
-	readChatsArray(qsl("always"), result.always);
-
-	return result;
-}
-
-ChatFilter::ChatFilter(FilterId id, bool isLocal)
-: _id(id)
-, _isLocal(isLocal) {
-}
 
 ChatFilter::ChatFilter(
 	FilterId id,
@@ -233,78 +40,19 @@ ChatFilter::ChatFilter(
 	Flags flags,
 	base::flat_set<not_null<History*>> always,
 	std::vector<not_null<History*>> pinned,
-	base::flat_set<not_null<History*>> never,
-	bool isDefault,
-	bool isLocal,
-	int cloudLocalOrder)
+	base::flat_set<not_null<History*>> never)
 : _id(id)
 , _title(title)
 , _iconEmoji(iconEmoji)
 , _always(std::move(always))
 , _pinned(std::move(pinned))
 , _never(std::move(never))
-, _flags(flags)
-, _isDefault(isDefault)
-, _isLocal(isLocal)
-, _cloudLocalOrder(cloudLocalOrder) {
-}
-
-ChatFilter ChatFilter::local(
-		const LocalFolder &data,
-		not_null<Session*> owner) {
-	auto &&to_histories = ranges::view::transform([&](
-			const uint64 &filterPeer) {
-		PeerData *peer = nullptr;
-		auto peerId = PeerId(filterPeer);
-
-		if (peerIsUser(peerId)) {
-			const auto user = owner->user(peerToUser(peerId).bare);
-			peer = (PeerData *)user;
-		} else if (peerIsChat(peerId)) {
-			const auto chat = owner->chat(peerToChat(peerId).bare);
-			peer = (PeerData *)chat;
-		} else if (peerIsChannel(peerId)) {
-			const auto channel = owner->channel(peerToChannel(peerId).bare);
-			peer = (PeerData *)channel;
-		}
-		return peer ? owner->history(peer).get() : nullptr;
-	}) | ranges::view::filter([](History *history) {
-		return history != nullptr;
-	}) | ranges::view::transform([](History *history) {
-		return not_null<History*>(history);
-	});
-	auto &&always = ranges::view::concat(
-		data.always
-	) | to_histories;
-	auto pinned = ranges::view::all(
-		data.pinned
-	) | to_histories | ranges::to_vector;
-	auto &&never = ranges::view::all(
-		data.never
-	) | to_histories;
-	auto &&all = ranges::view::concat(always, pinned);
-	auto list = base::flat_set<not_null<History*>>{
-		all.begin(),
-		all.end()
-	};
-	const auto defaultFilterId = owner->session().account().defaultFilterId();
-	return ChatFilter(
-		data.id,
-		data.name,
-		data.emoticon,
-		data.flags,
-		std::move(list),
-		std::move(pinned),
-		{ never.begin(), never.end() },
-		(data.id == defaultFilterId),
-		true,
-		data.cloudOrder);
+, _flags(flags) {
 }
 
 ChatFilter ChatFilter::FromTL(
 		const MTPDialogFilter &data,
-		not_null<Session*> owner,
-		bool isLocal) {
+		not_null<Session*> owner) {
 	return data.match([&](const MTPDdialogFilter &data) {
 		const auto flags = (data.is_contacts() ? Flag::Contacts : Flag(0))
 			| (data.is_non_contacts() ? Flag::NonContacts : Flag(0))
@@ -351,7 +99,6 @@ ChatFilter ChatFilter::FromTL(
 			all.begin(),
 			all.end()
 		};
-		const auto defaultFilterId = owner->session().account().defaultFilterId();
 		return ChatFilter(
 			data.vid().v,
 			qs(data.vtitle()),
@@ -359,9 +106,9 @@ ChatFilter ChatFilter::FromTL(
 			flags,
 			std::move(list),
 			std::move(pinned),
-			{ never.begin(), never.end() },
-			(data.vid().v == defaultFilterId),
-			isLocal);
+			{ never.begin(), never.end() });
+	}, [](const MTPDdialogFilterDefault &d) {
+		return ChatFilter();
 	});
 }
 
@@ -405,49 +152,12 @@ MTPDialogFilter ChatFilter::tl(FilterId replaceId) const {
 		MTP_vector<MTPInputPeer>(never));
 }
 
-LocalFolder ChatFilter::toLocal(FilterId replaceId) const {
-	auto always = _always;
-	auto pinned = std::vector<uint64>();
-	pinned.reserve(_pinned.size());
-	for (const auto &history : _pinned) {
-		const auto &peer = history->peer;
-		pinned.push_back(peer->id.value);
-		always.remove(history);
-	}
-	auto include = std::vector<uint64>();
-	include.reserve(always.size());
-	for (const auto &history : always) {
-		const auto &peer = history->peer;
-		include.push_back(peer->id.value);
-	}
-	auto never = std::vector<uint64>();
-	never.reserve(_never.size());
-	for (const auto &history : _never) {
-		const auto &peer = history->peer;
-		never.push_back(peer->id.value);
-	}
-	return {
-		.id = replaceId ? replaceId : _id,
-		.cloudOrder = _cloudLocalOrder,
-		.name = _title,
-		.emoticon = _iconEmoji,
-		.always = include,
-		.never = never,
-		.pinned = pinned,
-		.flags = _flags
-	};
-}
-
 FilterId ChatFilter::id() const {
 	return _id;
 }
 
 QString ChatFilter::title() const {
 	return _title;
-}
-
-bool ChatFilter::isDefault() const {
-	return _isDefault;
 }
 
 QString ChatFilter::iconEmoji() const {
@@ -471,9 +181,6 @@ const base::flat_set<not_null<History*>> &ChatFilter::never() const {
 }
 
 bool ChatFilter::contains(not_null<History*> history) const {
-	if (_never.contains(history)) {
-		return false;
-	}
 	const auto flag = [&] {
 		const auto peer = history->peer;
 		if (const auto user = peer->asUser()) {
@@ -494,95 +201,30 @@ bool ChatFilter::contains(not_null<History*> history) const {
 			Unexpected("Peer type in ChatFilter::contains.");
 		}
 	}();
-	const auto filterAdmin = [&] {
-		if (!(_flags & Flag::Owned)
-			&& !(_flags & Flag::NotOwned)
-			&& !(_flags & Flag::Admin)
-			&& !(_flags & Flag::NotAdmin)) {
-			return true;
-		}
-
-		const auto peer = history->peer;
-		if (const auto chat = peer->asChat()) {
-			// if i created the chat:
-			// // if the filter excludes owned chats, don't add in list
-			// // if the filter excludes non-admin chats, add only if filter includes owned chats
-			// else if i am admin in chat:
-			// // if the filter excludes admin chats, don't add in list
-			// // if the filter excludes non-owned chats, add only if filter includes admin chats
-			// else:
-			// // add in list only if filter doesn't exclude non-owned or non-admin chats
-			if (chat->amCreator()) {
-				return !(_flags & Flag::NotOwned) && ((_flags & Flag::Admin)
-					? (_flags & Flag::Owned)
-					: true);
-			} else if (chat->hasAdminRights()) {
-				return !(_flags & Flag::NotAdmin) && ((_flags & Flag::Owned)
-					? (_flags & Flag::Admin)
-					: true);
-			} else {
-				return !(_flags & Flag::Owned) && !(_flags & Flag::Admin);
-			}
-		} else if (const auto channel = peer->asChannel()) {
-			if (channel->amCreator()) {
-				return !(_flags & Flag::NotOwned) && ((_flags & Flag::Admin)
-					? (_flags & Flag::Owned)
-					: true);
-			} else if (channel->hasAdminRights()) {
-				return !(_flags & Flag::NotAdmin) && ((_flags & Flag::Owned)
-					? (_flags & Flag::Admin)
-					: true);
-			} else {
-				return !(_flags & Flag::Owned) && !(_flags & Flag::Admin);
-			}
-		}
-
+	if (_never.contains(history)) {
 		return false;
-	};
-	const auto filterUnfiltered = [&] {
-		if (!(_flags & Flag::NoFilter)) {
-			return true;
-		}
-
-		const auto &list = history->owner().chatsFilters().list();
-		for (auto filter : list) {
-			if (filter.id() == _id) {
-				continue;
-			}
-
-			if (filter.contains(history)) {
-				return false;
-			}
-		}
-
-		return true;
-	};
+	}
+	const auto state = (_flags & (Flag::NoMuted | Flag::NoRead))
+		? history->chatListBadgesState()
+		: Dialogs::BadgesState();
 	return false
 		|| ((_flags & flag)
-			&& filterAdmin()
-			&& (!(_flags & Flag::Recent)
-				|| history->owner().session().account().isRecent(history->peer->id))
 			&& (!(_flags & Flag::NoMuted)
-				|| !history->mute()
-				|| (history->unreadMentions().has()
+				|| !history->muted()
+				|| (state.mention
 					&& history->folderKnown()
 					&& !history->folder()))
 			&& (!(_flags & Flag::NoRead)
-				|| history->unreadCount()
-				|| history->unreadMark()
-				|| history->unreadMentions().has()
+				|| state.unread
+				|| state.mention
 				|| history->fakeUnreadWhileOpened())
 			&& (!(_flags & Flag::NoArchived)
-				|| (history->folderKnown() && !history->folder()))
-			&& filterUnfiltered())
+				|| (history->folderKnown() && !history->folder())))
 		|| _always.contains(history);
 }
 
-bool ChatFilter::isLocal() const {
-	return _isLocal;
-}
-
 ChatFilters::ChatFilters(not_null<Session*> owner) : _owner(owner) {
+	_list.emplace_back();
 	crl::on_main(&owner->session(), [=] { load(); });
 }
 
@@ -591,10 +233,15 @@ ChatFilters::~ChatFilters() = default;
 not_null<Dialogs::MainList*> ChatFilters::chatsList(FilterId filterId) {
 	auto &pointer = _chatsLists[filterId];
 	if (!pointer) {
+		auto limit = rpl::single(rpl::empty_value()) | rpl::then(
+			_owner->session().account().appConfig().refreshed()
+		) | rpl::map([=] {
+			return _owner->pinnedChatsLimit(filterId);
+		});
 		pointer = std::make_unique<Dialogs::MainList>(
 			&_owner->session(),
 			filterId,
-			rpl::single(ChatFilter::kPinnedLimit));
+			_owner->maxPinnedChatsLimitValue(filterId));
 	}
 	return pointer.get();
 }
@@ -629,15 +276,10 @@ void ChatFilters::load(bool force) {
 }
 
 void ChatFilters::received(const QVector<MTPDialogFilter> &list) {
-	const auto account = &_owner->session().account();
-	const auto accountId = account->session().userId().bare;
-	const auto isTestAccount = account->mtp().isTestMode();
-	const auto localFilters = ::Kotato::JsonSettings::GetJsonArray("folders/local", accountId, isTestAccount);
 	auto position = 0;
-	auto originalPosition = 0;
 	auto changed = false;
-
-	auto addToList = [&] (ChatFilter parsed) {
+	for (const auto &filter : list) {
+		auto parsed = ChatFilter::FromTL(filter, _owner);
 		const auto b = begin(_list) + position, e = end(_list);
 		const auto i = ranges::find(b, e, parsed.id(), &ChatFilter::id);
 		if (i == e) {
@@ -653,45 +295,13 @@ void ChatFilters::received(const QVector<MTPDialogFilter> &list) {
 			changed = true;
 		}
 		++position;
-	};
-
-	// First we're adding cloud filters and corresponding local filters.
-	for (const auto &filter : list) {
-		addToList(ChatFilter::FromTL(filter, _owner));
-		for (const auto &localFilter : localFilters) {
-			auto local = MakeLocalFolder(localFilter.toObject());
-			if (local.cloudOrder != originalPosition) {
-				continue;
-			}
-			addToList(ChatFilter::local(local, _owner));
-		}
-		++originalPosition;
 	}
-
-	// Then we adding local filters, retaining cloud order
-	while (originalPosition < kFiltersLimit) {
-		for (const auto &localFilter : localFilters) {
-			auto local = MakeLocalFolder(localFilter.toObject());
-			if (local.cloudOrder != originalPosition) {
-				continue;
-			}
-			addToList(ChatFilter::local(local, _owner));
-		}
-		++originalPosition;
-	}
-
-	// And finally we adding other filters
-	for (const auto &localFilter : localFilters) {
-		auto local = MakeLocalFolder(localFilter.toObject());
-		if (local.cloudOrder < kFiltersLimit) {
-			continue;
-		}
-		addToList(ChatFilter::local(local, _owner));
-	}
-
 	while (position < _list.size()) {
 		applyRemove(position);
 		changed = true;
+	}
+	if (!ranges::contains(begin(_list), end(_list), 0, &ChatFilter::id)) {
+		_list.insert(begin(_list), ChatFilter());
 	}
 	if (changed || !_loaded) {
 		_loaded = true;
@@ -737,7 +347,7 @@ void ChatFilters::applyInsert(ChatFilter filter, int position) {
 
 	_list.insert(
 		begin(_list) + position,
-		ChatFilter(filter.id(), {}, {}, {}, {}, {}, {}, false, filter.isLocal()));
+		ChatFilter(filter.id(), {}, {}, {}, {}, {}, {}));
 	applyChange(*(begin(_list) + position), std::move(filter));
 }
 
@@ -748,6 +358,16 @@ void ChatFilters::remove(FilterId id) {
 	}
 	applyRemove(i - begin(_list));
 	_listChanged.fire({});
+}
+
+void ChatFilters::moveAllToFront() {
+	const auto i = ranges::find(_list, FilterId(), &ChatFilter::id);
+	if (!_list.empty() && i == begin(_list)) {
+		return;
+	} else if (i != end(_list)) {
+		_list.erase(i);
+	}
+	_list.insert(begin(_list), ChatFilter());
 }
 
 void ChatFilters::applyRemove(int position) {
@@ -856,6 +476,7 @@ const ChatFilter &ChatFilters::applyUpdatedPinned(
 	const auto i = ranges::find(_list, id, &ChatFilter::id);
 	Assert(i != end(_list));
 
+	const auto limit = _owner->pinnedChatsLimit(id);
 	auto always = i->always();
 	auto pinned = std::vector<not_null<History*>>();
 	pinned.reserve(dialogs.size());
@@ -863,13 +484,12 @@ const ChatFilter &ChatFilters::applyUpdatedPinned(
 		if (const auto history = row.history()) {
 			if (always.contains(history)) {
 				pinned.push_back(history);
-			} else if (always.size() < ChatFilter::kPinnedLimit || i->isLocal()) {
+			} else if (always.size() < limit) {
 				always.insert(history);
 				pinned.push_back(history);
 			}
 		}
 	}
-	const auto defaultFilterId = _owner->session().account().defaultFilterId();
 	set(ChatFilter(
 		id,
 		i->title(),
@@ -877,9 +497,7 @@ const ChatFilter &ChatFilters::applyUpdatedPinned(
 		i->flags(),
 		std::move(always),
 		std::move(pinned),
-		i->never(),
-		(id == defaultFilterId),
-		i->isLocal()));
+		i->never()));
 	return *i;
 }
 
@@ -894,30 +512,15 @@ void ChatFilters::saveOrder(
 
 	auto ids = QVector<MTPint>();
 	ids.reserve(order.size());
-	auto cloudIds = QVector<MTPint>();
-	cloudIds.reserve(kFiltersLimit);
-
 	for (const auto id : order) {
 		ids.push_back(MTP_int(id));
-
-		auto i = ranges::find(_list, id, &ChatFilter::id);
-		Assert(i != end(_list));
-
-		if ((*i).isLocal()) {
-			i->setLocalCloudOrder(cloudIds.size());
-		} else {
-			cloudIds.push_back(MTP_int(id));
-		}
 	}
 	const auto wrapped = MTP_vector<MTPint>(ids);
-	apply(MTP_updateDialogFilterOrder(wrapped));
 
-	if (!cloudIds.isEmpty()) {
-		const auto cloudWrapped = MTP_vector<MTPint>(cloudIds);
-		_saveOrderRequestId = api->request(MTPmessages_UpdateDialogFiltersOrder(
-			cloudWrapped
-		)).afterRequest(_saveOrderAfterId).send();
-	}
+	apply(MTP_updateDialogFilterOrder(wrapped));
+	_saveOrderRequestId = api->request(MTPmessages_UpdateDialogFiltersOrder(
+		wrapped
+	)).afterRequest(_saveOrderAfterId).send();
 }
 
 bool ChatFilters::archiveNeeded() const {
@@ -931,6 +534,32 @@ bool ChatFilters::archiveNeeded() const {
 
 const std::vector<ChatFilter> &ChatFilters::list() const {
 	return _list;
+}
+
+FilterId ChatFilters::defaultId() const {
+	return lookupId(0);
+}
+
+FilterId ChatFilters::lookupId(int index) const {
+	Expects(index >= 0 && index < _list.size());
+
+	if (_owner->session().user()->isPremium() || !_list.front().id()) {
+		return _list[index].id();
+	}
+	const auto i = ranges::find(_list, FilterId(0), &ChatFilter::id);
+	return !index
+		? FilterId()
+		: (index <= int(i - begin(_list)))
+		? _list[index - 1].id()
+		: _list[index].id();
+}
+
+bool ChatFilters::loaded() const {
+	return _loaded;
+}
+
+bool ChatFilters::has() const {
+	return _list.size() > 1;
 }
 
 rpl::producer<> ChatFilters::changed() const {
@@ -1037,21 +666,6 @@ const std::vector<SuggestedFilter> &ChatFilters::suggestedFilters() const {
 
 rpl::producer<> ChatFilters::suggestedUpdated() const {
 	return _suggestedUpdated.events();
-}
-
-void ChatFilters::saveLocal() {
-	auto localFolders = QJsonArray();
-	const auto account = &_owner->session().account();
-	const auto accountId = account->session().userId().bare;
-	const auto isTestAccount = account->mtp().isTestMode();
-
-	for (const auto &folder : _list) {
-		if (folder.isLocal()) {
-			localFolders << folder.toLocal().toJson();
-		}
-	}
-
-	::Kotato::JsonSettings::Set("folders/local", localFolders, accountId, isTestAccount);
 }
 
 } // namespace Data

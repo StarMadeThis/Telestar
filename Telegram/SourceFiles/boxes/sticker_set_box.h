@@ -16,17 +16,48 @@ class SessionController;
 } // namespace Window
 
 namespace Ui {
-class ConfirmBox;
 class PlainShadow;
-class DropdownMenu;
 } // namespace Ui
+
+namespace Data {
+class StickersSet;
+} // namespace Data
+
+class StickerPremiumMark final {
+public:
+	explicit StickerPremiumMark(not_null<Main::Session*> session);
+
+	void paint(
+		QPainter &p,
+		const QImage &frame,
+		QImage &backCache,
+		QPoint position,
+		QSize singleSize,
+		int outerWidth);
+
+private:
+	void validateLock(const QImage &frame, QImage &backCache);
+	void validateStar();
+
+	QImage _lockGray;
+	QImage _star;
+	bool _premium = false;
+
+	rpl::lifetime _lifetime;
+
+};
 
 class StickerSetBox final : public Ui::BoxContent {
 public:
 	StickerSetBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,
-		const StickerSetIdentifier &set);
+		const StickerSetIdentifier &set,
+		Data::StickersType type);
+	StickerSetBox(
+		QWidget*,
+		not_null<Window::SessionController*> controller,
+		not_null<Data::StickersSet*> set);
 
 	static QPointer<Ui::BoxContent> Show(
 		not_null<Window::SessionController*> controller,
@@ -44,15 +75,13 @@ private:
 
 	void updateTitleAndButtons();
 	void updateButtons();
-	bool showMenu(not_null<Ui::IconButton*> button);
 	void addStickers();
 	void copyStickersLink();
-	void copyTitle();
 	void handleError(Error error);
 
 	const not_null<Window::SessionController*> _controller;
 	const StickerSetIdentifier _set;
-	base::unique_qptr<Ui::DropdownMenu> _menu;
+	const Data::StickersType _type;
 
 	class Inner;
 	QPointer<Inner> _inner;

@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/chat/chat_theme.h"
 #include "ui/image/image_prepare.h" // ImageRoundRadius
+#include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "styles/style_chat.h"
 #include "styles/style_dialogs.h"
@@ -24,49 +25,6 @@ void EnsureCorners(
 		const style::color *shadow = nullptr) {
 	if (corners.p[0].isNull()) {
 		corners = Ui::PrepareCornerPixmaps(radius, color, shadow);
-	}
-}
-
-void RectWithCorners(
-		Painter &p,
-		QRect rect,
-		const style::color &bg,
-		const CornersPixmaps &corners,
-		RectParts roundCorners) {
-	const auto parts = RectPart::Top
-		| RectPart::NoTopBottom
-		| RectPart::Bottom
-		| roundCorners;
-	FillRoundRect(p, rect, bg, corners, nullptr, parts);
-	if ((roundCorners & RectPart::AllCorners) != RectPart::AllCorners) {
-		const auto size = corners.p[0].width() / style::DevicePixelRatio();
-		if (!(roundCorners & RectPart::TopLeft)) {
-			p.fillRect(rect.x(), rect.y(), size, size, bg);
-		}
-		if (!(roundCorners & RectPart::TopRight)) {
-			p.fillRect(
-				rect.x() + rect.width() - size,
-				rect.y(),
-				size,
-				size,
-				bg);
-		}
-		if (!(roundCorners & RectPart::BottomLeft)) {
-			p.fillRect(
-				rect.x(),
-				rect.y() + rect.height() - size,
-				size,
-				size,
-				bg);
-		}
-		if (!(roundCorners & RectPart::BottomRight)) {
-			p.fillRect(
-				rect.x() + rect.width() - size,
-				rect.y() + rect.height() - size,
-				size,
-				size,
-				bg);
-		}
 	}
 }
 
@@ -124,8 +82,10 @@ ChatStyle::ChatStyle() {
 	make(_msgBotKbUrlIcon, st::msgBotKbUrlIcon);
 	make(_msgBotKbPaymentIcon, st::msgBotKbPaymentIcon);
 	make(_msgBotKbSwitchPmIcon, st::msgBotKbSwitchPmIcon);
+	make(_msgBotKbWebviewIcon, st::msgBotKbWebviewIcon);
 	make(_historyFastCommentsIcon, st::historyFastCommentsIcon);
 	make(_historyFastShareIcon, st::historyFastShareIcon);
+	make(_historyFastTranscribeIcon, st::historyFastTranscribeIcon);
 	make(_historyGoToOriginalIcon, st::historyGoToOriginalIcon);
 	make(_historyMapPoint, st::historyMapPoint);
 	make(_historyMapPointInner, st::historyMapPointInner);
@@ -133,72 +93,6 @@ ChatStyle::ChatStyle() {
 	make(_videoIcon, st::videoIcon);
 	make(_historyPollChoiceRight, st::historyPollChoiceRight);
 	make(_historyPollChoiceWrong, st::historyPollChoiceWrong);
-	make(_msgNameChat1Icon, st::msgNameChat1Icon);
-	make(_msgNameChat1IconSelected, st::msgNameChat1IconSelected);
-	make(_msgNameChat2Icon, st::msgNameChat2Icon);
-	make(_msgNameChat2IconSelected, st::msgNameChat2IconSelected);
-	make(_msgNameChat3Icon, st::msgNameChat3Icon);
-	make(_msgNameChat3IconSelected, st::msgNameChat3IconSelected);
-	make(_msgNameChat4Icon, st::msgNameChat4Icon);
-	make(_msgNameChat4IconSelected, st::msgNameChat4IconSelected);
-	make(_msgNameChat5Icon, st::msgNameChat5Icon);
-	make(_msgNameChat5IconSelected, st::msgNameChat5IconSelected);
-	make(_msgNameChat6Icon, st::msgNameChat6Icon);
-	make(_msgNameChat6IconSelected, st::msgNameChat6IconSelected);
-	make(_msgNameChat7Icon, st::msgNameChat7Icon);
-	make(_msgNameChat7IconSelected, st::msgNameChat7IconSelected);
-	make(_msgNameChat8Icon, st::msgNameChat8Icon);
-	make(_msgNameChat8IconSelected, st::msgNameChat8IconSelected);
-	make(_msgNameChannel1Icon, st::msgNameChannel1Icon);
-	make(_msgNameChannel1IconSelected, st::msgNameChannel1IconSelected);
-	make(_msgNameChannel2Icon, st::msgNameChannel2Icon);
-	make(_msgNameChannel2IconSelected, st::msgNameChannel2IconSelected);
-	make(_msgNameChannel3Icon, st::msgNameChannel3Icon);
-	make(_msgNameChannel3IconSelected, st::msgNameChannel3IconSelected);
-	make(_msgNameChannel4Icon, st::msgNameChannel4Icon);
-	make(_msgNameChannel4IconSelected, st::msgNameChannel4IconSelected);
-	make(_msgNameChannel5Icon, st::msgNameChannel5Icon);
-	make(_msgNameChannel5IconSelected, st::msgNameChannel5IconSelected);
-	make(_msgNameChannel6Icon, st::msgNameChannel6Icon);
-	make(_msgNameChannel6IconSelected, st::msgNameChannel6IconSelected);
-	make(_msgNameChannel7Icon, st::msgNameChannel7Icon);
-	make(_msgNameChannel7IconSelected, st::msgNameChannel7IconSelected);
-	make(_msgNameChannel8Icon, st::msgNameChannel8Icon);
-	make(_msgNameChannel8IconSelected, st::msgNameChannel8IconSelected);
-	make(_msgNameBot1Icon, st::msgNameBot1Icon);
-	make(_msgNameBot1IconSelected, st::msgNameBot1IconSelected);
-	make(_msgNameBot2Icon, st::msgNameBot2Icon);
-	make(_msgNameBot2IconSelected, st::msgNameBot2IconSelected);
-	make(_msgNameBot3Icon, st::msgNameBot3Icon);
-	make(_msgNameBot3IconSelected, st::msgNameBot3IconSelected);
-	make(_msgNameBot4Icon, st::msgNameBot4Icon);
-	make(_msgNameBot4IconSelected, st::msgNameBot4IconSelected);
-	make(_msgNameBot5Icon, st::msgNameBot5Icon);
-	make(_msgNameBot5IconSelected, st::msgNameBot5IconSelected);
-	make(_msgNameBot6Icon, st::msgNameBot6Icon);
-	make(_msgNameBot6IconSelected, st::msgNameBot6IconSelected);
-	make(_msgNameBot7Icon, st::msgNameBot7Icon);
-	make(_msgNameBot7IconSelected, st::msgNameBot7IconSelected);
-	make(_msgNameBot8Icon, st::msgNameBot8Icon);
-	make(_msgNameBot8IconSelected, st::msgNameBot8IconSelected);
-	make(_msgNameDeleted1Icon, st::msgNameDeleted1Icon);
-	make(_msgNameDeleted1IconSelected, st::msgNameDeleted1IconSelected);
-	make(_msgNameDeleted2Icon, st::msgNameDeleted2Icon);
-	make(_msgNameDeleted2IconSelected, st::msgNameDeleted2IconSelected);
-	make(_msgNameDeleted3Icon, st::msgNameDeleted3Icon);
-	make(_msgNameDeleted3IconSelected, st::msgNameDeleted3IconSelected);
-	make(_msgNameDeleted4Icon, st::msgNameDeleted4Icon);
-	make(_msgNameDeleted4IconSelected, st::msgNameDeleted4IconSelected);
-	make(_msgNameDeleted5Icon, st::msgNameDeleted5Icon);
-	make(_msgNameDeleted5IconSelected, st::msgNameDeleted5IconSelected);
-	make(_msgNameDeleted6Icon, st::msgNameDeleted6Icon);
-	make(_msgNameDeleted6IconSelected, st::msgNameDeleted6IconSelected);
-	make(_msgNameDeleted7Icon, st::msgNameDeleted7Icon);
-	make(_msgNameDeleted7IconSelected, st::msgNameDeleted7IconSelected);
-	make(_msgNameDeleted8Icon, st::msgNameDeleted8Icon);
-	make(_msgNameDeleted8IconSelected, st::msgNameDeleted8IconSelected);
-	make(_msgNameSponsoredIcon, st::msgNameSponsoredIcon);
-	make(_msgNameSponsoredIconSelected, st::msgNameSponsoredIconSelected);
 	make(
 		&MessageStyle::msgBg,
 		st::msgInBg,
@@ -464,6 +358,18 @@ ChatStyle::ChatStyle() {
 		st::historyPollOutChoiceRight,
 		st::historyPollOutChoiceRightSelected);
 	make(
+		&MessageStyle::historyTranscribeIcon,
+		st::historyTranscribeInIcon,
+		st::historyTranscribeInIconSelected,
+		st::historyTranscribeOutIcon,
+		st::historyTranscribeOutIconSelected);
+	make(
+		&MessageStyle::historyTranscribeHide,
+		st::historyTranscribeInHide,
+		st::historyTranscribeInHideSelected,
+		st::historyTranscribeOutHide,
+		st::historyTranscribeOutHideSelected);
+	make(
 		&MessageImageStyle::msgDateImgBg,
 		st::msgDateImgBg,
 		st::msgDateImgBgSelected);
@@ -513,6 +419,11 @@ ChatStyle::ChatStyle() {
 		st::historyVideoMessageMuteSelected);
 }
 
+ChatStyle::ChatStyle(not_null<const style::palette*> isolated)
+: ChatStyle() {
+	assignPalette(isolated);
+}
+
 void ChatStyle::apply(not_null<ChatTheme*> theme) {
 	const auto themePalette = theme->palette();
 	assignPalette(themePalette
@@ -532,18 +443,23 @@ void ChatStyle::assignPalette(not_null<const style::palette*> palette) {
 	*static_cast<style::palette*>(this) = *palette;
 	style::internal::resetIcons();
 	for (auto &style : _messageStyles) {
-		style.msgBgCorners = {};
+		style.msgBgCornersSmall = {};
+		style.msgBgCornersLarge = {};
 	}
 	for (auto &style : _imageStyles) {
 		style.msgDateImgBgCorners = {};
-		style.msgServiceBgCorners = {};
-		style.msgShadowCorners = {};
+		style.msgServiceBgCornersSmall = {};
+		style.msgServiceBgCornersLarge = {};
+		style.msgShadowCornersSmall = {};
+		style.msgShadowCornersLarge = {};
 	}
 	_serviceBgCornersNormal = {};
 	_serviceBgCornersInverted = {};
-	_msgBotKbOverBgAddCorners = {};
-	_msgSelectOverlayCornersSmall = {};
-	_msgSelectOverlayCornersLarge = {};
+	_msgBotKbOverBgAddCornersSmall = {};
+	_msgBotKbOverBgAddCornersLarge = {};
+	for (auto &corners : _msgSelectOverlayCorners) {
+		corners = {};
+	}
 
 	for (auto &stm : _messageStyles) {
 		const auto same = (stm.textPalette.linkFg->c == stm.historyTextFg->c);
@@ -564,20 +480,9 @@ const CornersPixmaps &ChatStyle::serviceBgCornersNormal() const {
 
 const CornersPixmaps &ChatStyle::serviceBgCornersInverted() const {
 	if (_serviceBgCornersInverted.p[0].isNull()) {
-		const auto radius = HistoryServiceMsgInvertedRadius();
-		const auto size = radius * style::DevicePixelRatio();
-		auto circle = style::colorizeImage(
-			style::createInvertedCircleMask(radius * 2),
+		_serviceBgCornersInverted = Ui::PrepareInvertedCornerPixmaps(
+			HistoryServiceMsgInvertedRadius(),
 			msgServiceBg());
-		circle.setDevicePixelRatio(style::DevicePixelRatio());
-		const auto fill = [&](int index, int xoffset, int yoffset) {
-			_serviceBgCornersInverted.p[index] = PixmapFromImage(
-				circle.copy(QRect(xoffset, yoffset, size, size)));
-		};
-		fill(0, 0, 0);
-		fill(1, size, 0);
-		fill(2, size, size);
-		fill(3, 0, size);
 	}
 	return _serviceBgCornersInverted;
 }
@@ -585,8 +490,13 @@ const CornersPixmaps &ChatStyle::serviceBgCornersInverted() const {
 const MessageStyle &ChatStyle::messageStyle(bool outbg, bool selected) const {
 	auto &result = messageStyleRaw(outbg, selected);
 	EnsureCorners(
-		result.msgBgCorners,
-		st::historyMessageRadius,
+		result.msgBgCornersSmall,
+		BubbleRadiusSmall(),
+		result.msgBg,
+		&result.msgShadow);
+	EnsureCorners(
+		result.msgBgCornersLarge,
+		BubbleRadiusLarge(),
 		result.msgBg,
 		&result.msgShadow);
 	return result;
@@ -596,41 +506,53 @@ const MessageImageStyle &ChatStyle::imageStyle(bool selected) const {
 	auto &result = imageStyleRaw(selected);
 	EnsureCorners(
 		result.msgDateImgBgCorners,
-		st::dateRadius,
+		(st::msgDateImgPadding.y() * 2 + st::normalFont->height) / 2,
 		result.msgDateImgBg);
 	EnsureCorners(
-		result.msgServiceBgCorners,
-		st::dateRadius,
+		result.msgServiceBgCornersSmall,
+		BubbleRadiusSmall(),
 		result.msgServiceBg);
 	EnsureCorners(
-		result.msgShadowCorners,
-		st::historyMessageRadius,
+		result.msgServiceBgCornersLarge,
+		BubbleRadiusLarge(),
+		result.msgServiceBg);
+	EnsureCorners(
+		result.msgShadowCornersSmall,
+		BubbleRadiusSmall(),
+		result.msgShadow);
+	EnsureCorners(
+		result.msgShadowCornersLarge,
+		BubbleRadiusLarge(),
 		result.msgShadow);
 	return result;
 }
 
-const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCorners() const {
+const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCornersSmall() const {
 	EnsureCorners(
-		_msgBotKbOverBgAddCorners,
-		st::dateRadius,
+		_msgBotKbOverBgAddCornersSmall,
+		BubbleRadiusSmall(),
 		msgBotKbOverBgAdd());
-	return _msgBotKbOverBgAddCorners;
+	return _msgBotKbOverBgAddCornersSmall;
 }
 
-const CornersPixmaps &ChatStyle::msgSelectOverlayCornersSmall() const {
+const CornersPixmaps &ChatStyle::msgBotKbOverBgAddCornersLarge() const {
 	EnsureCorners(
-		_msgSelectOverlayCornersSmall,
-		st::roundRadiusSmall,
-		msgSelectOverlay());
-	return _msgSelectOverlayCornersSmall;
+		_msgBotKbOverBgAddCornersLarge,
+		BubbleRadiusLarge(),
+		msgBotKbOverBgAdd());
+	return _msgBotKbOverBgAddCornersLarge;
 }
 
-const CornersPixmaps &ChatStyle::msgSelectOverlayCornersLarge() const {
+const CornersPixmaps &ChatStyle::msgSelectOverlayCorners(
+		CachedCornerRadius radius) const {
+	const auto index = static_cast<int>(radius);
+	Assert(index >= 0 && index < int(CachedCornerRadius::kCount));
+
 	EnsureCorners(
-		_msgSelectOverlayCornersLarge,
-		st::historyMessageRadius,
+		_msgSelectOverlayCorners[index],
+		CachedCornerRadiusValue(radius),
 		msgSelectOverlay());
-	return _msgSelectOverlayCornersLarge;
+	return _msgSelectOverlayCorners[index];
 }
 
 MessageStyle &ChatStyle::messageStyleRaw(bool outbg, bool selected) const {
@@ -679,14 +601,13 @@ void ChatStyle::make(
 	my.linkAlwaysActive = original.linkAlwaysActive;
 	make(my.linkFg, original.linkFg);
 	make(my.monoFg, original.monoFg);
+	make(my.spoilerFg, original.spoilerFg);
 	make(my.selectBg, original.selectBg);
 	make(my.selectFg, original.selectFg);
 	make(my.selectLinkFg, original.selectLinkFg);
 	make(my.selectMonoFg, original.selectMonoFg);
+	make(my.selectSpoilerFg, original.selectSpoilerFg);
 	make(my.selectOverlay, original.selectOverlay);
-	make(my.spoilerBg, original.spoilerBg);
-	make(my.spoilerActiveBg, original.spoilerActiveBg);
-	make(my.spoilerActiveFg, original.spoilerActiveFg);
 }
 
 void ChatStyle::make(
@@ -734,33 +655,117 @@ void ChatStyle::make(
 }
 
 void FillComplexOverlayRect(
-		Painter &p,
-		not_null<const ChatStyle*> st,
+		QPainter &p,
 		QRect rect,
-		ImageRoundRadius radius,
-		RectParts roundCorners) {
-	const auto bg = st->msgSelectOverlay();
-	if (radius == ImageRoundRadius::Ellipse) {
-		PainterHighQualityEnabler hq(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(bg);
-		p.drawEllipse(rect);
-	} else {
-		const auto &corners = (radius == ImageRoundRadius::Small)
-			? st->msgSelectOverlayCornersSmall()
-			: st->msgSelectOverlayCornersLarge();
-		RectWithCorners(p, rect, bg, corners, roundCorners);
+		const style::color &color,
+		const CornersPixmaps &corners) {
+	using namespace Images;
+
+	const auto pix = corners.p;
+	const auto fillRect = [&](QRect rect) {
+		p.fillRect(rect, color);
+	};
+	if (pix[kTopLeft].isNull()
+		&& pix[kTopRight].isNull()
+		&& pix[kBottomLeft].isNull()
+		&& pix[kBottomRight].isNull()) {
+		fillRect(rect);
+		return;
+	}
+
+	const auto ratio = style::DevicePixelRatio();
+	const auto fillCorner = [&](int left, int top, int index) {
+		p.drawPixmap(left, top, pix[index]);
+	};
+	const auto cornerSize = [&](int index) {
+		const auto &p = pix[index];
+		return p.isNull() ? 0 : p.width() / ratio;
+	};
+	const auto verticalSkip = [&](int left, int right) {
+		return std::max(cornerSize(left), cornerSize(right));
+	};
+	const auto top = verticalSkip(kTopLeft, kTopRight);
+	const auto bottom = verticalSkip(kBottomLeft, kBottomRight);
+	if (top) {
+		const auto left = cornerSize(kTopLeft);
+		const auto right = cornerSize(kTopRight);
+		if (left) {
+			fillCorner(rect.left(), rect.top(), kTopLeft);
+			if (const auto add = top - left) {
+				fillRect({ rect.left(), rect.top() + left, left, add });
+			}
+		}
+		if (const auto fill = rect.width() - left - right; fill > 0) {
+			fillRect({ rect.left() + left, rect.top(), fill, top });
+		}
+		if (right) {
+			fillCorner(
+				rect.left() + rect.width() - right,
+				rect.top(),
+				kTopRight);
+			if (const auto add = top - right) {
+				fillRect({
+					rect.left() + rect.width() - right,
+					rect.top() + right,
+					right,
+					add,
+				});
+			}
+		}
+	}
+	if (const auto h = rect.height() - top - bottom; h > 0) {
+		fillRect({ rect.left(), rect.top() + top, rect.width(), h });
+	}
+	if (bottom) {
+		const auto left = cornerSize(kBottomLeft);
+		const auto right = cornerSize(kBottomRight);
+		if (left) {
+			fillCorner(
+				rect.left(),
+				rect.top() + rect.height() - left,
+				kBottomLeft);
+			if (const auto add = bottom - left) {
+				fillRect({
+					rect.left(),
+					rect.top() + rect.height() - bottom,
+					left,
+					add,
+				});
+			}
+		}
+		if (const auto fill = rect.width() - left - right; fill > 0) {
+			fillRect({
+				rect.left() + left,
+				rect.top() + rect.height() - bottom,
+				fill,
+				bottom,
+			});
+		}
+		if (right) {
+			fillCorner(
+				rect.left() + rect.width() - right,
+				rect.top() + rect.height() - right,
+				kBottomRight);
+			if (const auto add = bottom - right) {
+				fillRect({
+					rect.left() + rect.width() - right,
+					rect.top() + rect.height() - bottom,
+					right,
+					add,
+				});
+			}
+		}
 	}
 }
 
-void FillComplexLocationRect(
-		Painter &p,
+void FillComplexEllipse(
+		QPainter &p,
 		not_null<const ChatStyle*> st,
-		QRect rect,
-		ImageRoundRadius radius,
-		RectParts roundCorners) {
-	const auto stm = &st->messageStyle(false, false);
-	RectWithCorners(p, rect, stm->msgBg, stm->msgBgCorners, roundCorners);
+		QRect rect) {
+	PainterHighQualityEnabler hq(p);
+	p.setPen(Qt::NoPen);
+	p.setBrush(st->msgSelectOverlay());
+	p.drawEllipse(rect);
 }
 
 } // namespace Ui

@@ -49,8 +49,6 @@ enum class Type;
 namespace InlineBots {
 namespace Layout {
 
-constexpr int kInlineItemsMaxPerRow = 5;
-
 class ItemBase;
 using Results = std::vector<std::unique_ptr<Result>>;
 
@@ -145,8 +143,7 @@ private:
 	void selectInlineResult(
 		int index,
 		Api::SendOptions options,
-		bool open,
-		bool sendPreview = false);
+		bool open);
 
 	not_null<Window::SessionController*> _controller;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;

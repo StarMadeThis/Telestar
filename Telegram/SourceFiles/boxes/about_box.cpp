@@ -7,10 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/about_box.h"
 
-#include "kotato/kotato_version.h"
-#include "kotato/kotato_lang.h"
 #include "lang/lang_keys.h"
-#include "lang/lang_instance.h"
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "ui/boxes/confirm_box.h"
@@ -18,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/text/text_utilities.h"
 #include "base/platform/base_platform_info.h"
+#include "core/file_utilities.h"
 #include "core/click_handler_types.h"
 #include "core/update_checker.h"
 #include "core/application.h"
@@ -30,10 +28,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace {
 
 rpl::producer<TextWithEntities> Text1() {
-	return rktre("ktg_about_text1", {
-		"tdesktop_link",
-		Ui::Text::Link(ktr("ktg_about_text1_tdesktop"), "https://desktop.telegram.org/")
-	});
+	return tr::lng_about_text1(
+		lt_api_link,
+		tr::lng_about_text1_api(
+		) | Ui::Text::ToLink("https://core.telegram.org/api"),
+		Ui::Text::WithEntities);
 }
 
 rpl::producer<TextWithEntities> Text2() {
@@ -41,37 +40,19 @@ rpl::producer<TextWithEntities> Text2() {
 		lt_gpl_link,
 		rpl::single(Ui::Text::Link(
 			"GNU GPL",
-			"https://github.com/kotatogram/kotatogram-desktop/blob/master/LICENSE")),
+			"https://github.com/telegramdesktop/tdesktop/blob/master/LICENSE")),
 		lt_github_link,
 		rpl::single(Ui::Text::Link(
 			"GitHub",
-			"https://github.com/kotatogram/kotatogram-desktop")),
+			"https://github.com/telegramdesktop/tdesktop")),
 		Ui::Text::WithEntities);
 }
 
 rpl::producer<TextWithEntities> Text3() {
-	auto baseLang = Lang::GetInstance().baseId();
-	auto currentLang = Lang::Id();
-	QString channelLink;
-
-	for (const auto language : { "ru", "uk", "be" }) {
-		if (baseLang.startsWith(QLatin1String(language)) || currentLang == QString(language)) {
-			channelLink = "https://t.me/kotatogram_ru";
-			break;
-		}
-	}
-
-	if (channelLink.isEmpty()) {
-		channelLink = "https://t.me/kotatogram";
-	}
-
-	return rktre("ktg_about_text3", {
-		"channel_link",
-		Ui::Text::Link(ktr("ktg_about_text3_channel"), channelLink)
-	}, {
-		"faq_link",
-		Ui::Text::Link(tr::lng_about_text3_faq(tr::now), telegramFaqLink())
-	});
+	return tr::lng_about_text3(
+		lt_faq_link,
+		tr::lng_about_text3_faq() | Ui::Text::ToLink(telegramFaqLink()),
+		Ui::Text::WithEntities);
 }
 
 } // namespace
@@ -84,7 +65,7 @@ AboutBox::AboutBox(QWidget *parent)
 }
 
 void AboutBox::prepare() {
-	setTitle(rpl::single(qsl("Kotatogram Desktop")));
+	setTitle(rpl::single(u"Telegram Desktop"_q));
 
 	addButton(tr::lng_close(), [this] { closeBox(); });
 
@@ -113,32 +94,31 @@ void AboutBox::resizeEvent(QResizeEvent *e) {
 }
 
 void AboutBox::showVersionHistory() {
-	/*
 	if (cRealAlphaVersion()) {
-		auto url = qsl("https://tdesktop.com/");
+		auto url = u"https://tdesktop.com/"_q;
 		if (Platform::IsWindows32Bit()) {
-			url += qsl("win/%1.zip");
+			url += u"win/%1.zip"_q;
 		} else if (Platform::IsWindows64Bit()) {
-			url += qsl("win64/%1.zip");
+			url += u"win64/%1.zip"_q;
 		} else if (Platform::IsMac()) {
-			url += qsl("mac/%1.zip");
+			url += u"mac/%1.zip"_q;
 		} else if (Platform::IsLinux()) {
-			url += qsl("linux/%1.tar.xz");
+			url += u"linux/%1.tar.xz"_q;
 		} else {
 			Unexpected("Platform value.");
 		}
-		url = url.arg(qsl("talpha%1_%2").arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
+		url = url.arg(u"talpha%1_%2"_q.arg(cRealAlphaVersion()).arg(Core::countAlphaVersionSignature(cRealAlphaVersion())));
 
 		QGuiApplication::clipboard()->setText(url);
 
-		Ui::show(Box<Ui::InformBox>("The link to the current private alpha "
-			"version of Telegram Desktop was copied to the clipboard."));
+		getDelegate()->show(
+			Ui::MakeInformBox(
+				"The link to the current private alpha "
+				"version of Telegram Desktop was copied to the clipboard."),
+			Ui::LayerOption::CloseOther);
 	} else {
-	*/
-		UrlClickHandler::Open(Core::App().changelogLink());
-	/*
+		File::OpenUrl(Core::App().changelogLink());
 	}
-	*/
 }
 
 void AboutBox::keyPressEvent(QKeyEvent *e) {
@@ -150,7 +130,7 @@ void AboutBox::keyPressEvent(QKeyEvent *e) {
 }
 
 QString telegramFaqLink() {
-	const auto result = qsl("https://telegram.org/faq");
+	const auto result = u"https://telegram.org/faq"_q;
 	const auto langpacked = [&](const char *language) {
 		return result + '/' + language;
 	};
@@ -160,22 +140,21 @@ QString telegramFaqLink() {
 			return langpacked(language);
 		}
 	}
-	if (current.startsWith(qstr("pt-br"))) {
+	if (current.startsWith(u"pt-br"_q)) {
 		return langpacked("br");
 	}
 	return result;
 }
 
 QString currentVersionText() {
-	auto result = QString::fromLatin1(AppKotatoVersionStr);
+	auto result = QString::fromLatin1(AppVersionStr);
 	if (cAlphaVersion()) {
-		result += qsl("-%1.%2").arg(AppKotatoTestBranch).arg(AppKotatoTestVersion);
-	} else if (AppKotatoBetaVersion) {
+		result += u" alpha %1"_q.arg(cAlphaVersion() % 1000);
+	} else if (AppBetaVersion) {
 		result += " beta";
 	}
 	if (Platform::IsWindows64Bit()) {
 		result += " x64";
 	}
-	result += qsl(" (TD %1)").arg(AppVersionStr);
 	return result;
 }

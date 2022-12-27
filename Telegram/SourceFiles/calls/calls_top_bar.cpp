@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_top_bar.h"
 
-#include "kotato/kotato_settings.h"
 #include "ui/effects/cross_line.h"
 #include "ui/paint/blobs_linear.h"
 #include "ui/widgets/buttons.h"
@@ -148,7 +147,7 @@ DebugInfoBox::DebugInfoBox(QWidget*, base::weak_ptr<Call> call)
 }
 
 void DebugInfoBox::prepare() {
-	setTitle(rpl::single(qsl("Call Debug")));
+	setTitle(rpl::single(u"Call Debug"_q));
 
 	addButton(tr::lng_close(), [this] { closeBox(); });
 	_text = setInnerWidget(
@@ -205,7 +204,7 @@ public:
 protected:
 	bool eventFilter(QObject *object, QEvent *event) {
 		if (event->type() == QEvent::Paint) {
-			Painter p(this);
+			auto p = QPainter(this);
 			paintRipple(
 				p,
 				_st.rippleAreaPosition.x(),
@@ -228,30 +227,33 @@ private:
 
 TopBar::TopBar(
 	QWidget *parent,
-	const base::weak_ptr<Call> &call)
-: TopBar(parent, call, nullptr) {
+	const base::weak_ptr<Call> &call,
+	std::shared_ptr<Ui::Show> show)
+: TopBar(parent, show, call, nullptr) {
 }
 
 TopBar::TopBar(
 	QWidget *parent,
-	const base::weak_ptr<GroupCall> &call)
-: TopBar(parent, nullptr, call) {
+	const base::weak_ptr<GroupCall> &call,
+	std::shared_ptr<Ui::Show> show)
+: TopBar(parent, show, nullptr, call) {
 }
 
 TopBar::TopBar(
 	QWidget *parent,
+	std::shared_ptr<Ui::Show> show,
 	const base::weak_ptr<Call> &call,
 	const base::weak_ptr<GroupCall> &groupCall)
 : RpWidget(parent)
 , _call(call)
 , _groupCall(groupCall)
+, _show(show)
 , _userpics(call
 	? nullptr
 	: std::make_unique<Ui::GroupCallUserpics>(
 		st::groupCallTopBarUserpics,
 		rpl::single(true),
-		[=] { updateUserpics(); },
-		::Kotato::JsonSettings::GetInt("userpic_corner_type")))
+		[=] { updateUserpics(); }))
 , _durationLabel(_call
 	? object_ptr<Ui::LabelSimple>(this, st::callBarLabel)
 	: object_ptr<Ui::LabelSimple>(nullptr))
@@ -281,7 +283,9 @@ void TopBar::initControls() {
 			call->setMuted(!call->muted());
 		} else if (const auto group = _groupCall.get()) {
 			if (group->mutedByAdmin()) {
-				Ui::Toast::Show(tr::lng_group_call_force_muted_sub(tr::now));
+				Ui::Toast::Show(
+					_show->toastParent(),
+					tr::lng_group_call_force_muted_sub(tr::now));
 			} else {
 				group->setMuted((group->muted() == MuteState::Muted)
 					? MuteState::Active
@@ -355,7 +359,7 @@ void TopBar::initControls() {
 
 			const auto crossProgress = (crossFrom == crossTo)
 				? crossTo
-				: anim::interpolateF(crossFrom, crossTo, value);
+				: anim::interpolateToF(crossFrom, crossTo, value);
 			_mute->setProgress(crossProgress);
 		};
 
@@ -396,7 +400,9 @@ void TopBar::initControls() {
 		if (const auto call = _call.get()) {
 			if (Logs::DebugEnabled()
 				&& (_info->clickModifiers() & Qt::ControlModifier)) {
-				Ui::show(Box<DebugInfoBox>(_call));
+				_show->showBox(
+					Box<DebugInfoBox>(_call),
+					Ui::LayerOption::CloseOther);
 			} else {
 				Core::App().calls().showInfoPanel(call);
 			}
@@ -411,11 +417,13 @@ void TopBar::initControls() {
 			if (!group->peer()->canManageGroupCall()) {
 				group->hangup();
 			} else {
-				Ui::show(Box(
-					Group::LeaveBox,
-					group,
-					false,
-					Group::BoxContext::MainWindow));
+				_show->showBox(
+					Box(
+						Group::LeaveBox,
+						group,
+						false,
+						Group::BoxContext::MainWindow),
+					Ui::LayerOption::CloseOther);
 			}
 		}
 	});
@@ -537,7 +545,7 @@ void TopBar::initBlobsUnder(
 			return;
 		}
 
-		Painter p(_blobs);
+		auto p = QPainter(_blobs);
 		if (hidden > 0.) {
 			p.setOpacity(1. - hidden);
 		}
@@ -636,14 +644,14 @@ void TopBar::updateInfoLabels() {
 void TopBar::setInfoLabels() {
 	if (const auto call = _call.get()) {
 		const auto user = call->user();
-		const auto fullName = user->name;
+		const auto fullName = user->name();
 		const auto shortName = user->firstName;
 		_fullInfoLabel->setText(fullName);
 		_shortInfoLabel->setText(shortName);
 	} else if (const auto group = _groupCall.get()) {
 		const auto peer = group->peer();
 		const auto real = peer->groupCall();
-		const auto name = peer->name;
+		const auto name = peer->name();
 		const auto text = _isGroupConnecting.current()
 			? tr::lng_group_call_connecting(tr::now)
 			: (real && real->id() == group->id() && !real->title().isEmpty())
@@ -743,7 +751,7 @@ void TopBar::updateControlsGeometry() {
 }
 
 void TopBar::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 	auto brush = _groupCall
 		? _groupBrush
 		: (_muted ? st::callBarBgMuted : st::callBarBg);

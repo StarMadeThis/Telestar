@@ -41,10 +41,12 @@ public:
 	[[nodiscard]] not_null<TabbedSelector*> selector() const;
 
 	void moveBottomRight(int bottom, int right);
+	void moveTopRight(int top, int right);
 	void setDesiredHeightValues(
 		float64 ratio,
 		int minHeight,
 		int maxHeight);
+	void setDropDown(bool dropDown);
 
 	void hideFast();
 	bool hiding() const {
@@ -56,10 +58,6 @@ public:
 	void showAnimated();
 	void hideAnimated();
 	void toggleAnimated();
-
-	void setPreventHover(bool value) {
-		_preventHover = value;
-	}
 
 	~TabbedPanel();
 
@@ -80,7 +78,7 @@ private:
 		TabbedSelector *nonOwnedSelector);
 
 	void hideByTimerOrLeave();
-	void moveByBottom();
+	void moveHorizontally();
 	void showFromSelector();
 
 	style::margins innerPadding() const;
@@ -107,6 +105,7 @@ private:
 
 	int _contentMaxHeight = 0;
 	int _contentHeight = 0;
+	int _top = 0;
 	int _bottom = 0;
 	int _right = 0;
 	float64 _heightRatio = 1.;
@@ -117,14 +116,13 @@ private:
 	Ui::Animations::Simple _a_show;
 
 	bool _shouldFinishHide = false;
+	bool _dropDown = false;
 
 	bool _hiding = false;
 	bool _hideAfterSlide = false;
 	QPixmap _cache;
 	Ui::Animations::Simple _a_opacity;
 	base::Timer _hideTimer;
-
-	bool _preventHover = false;
 
 };
 

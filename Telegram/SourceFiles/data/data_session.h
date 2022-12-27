@@ -13,7 +13,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_main_list.h"
 #include "data/data_groups.h"
 #include "data/data_cloud_file.h"
-#include "data/data_notify_settings.h"
 #include "history/history_location_manager.h"
 #include "base/timer.h"
 #include "base/flags.h"
@@ -53,6 +52,8 @@ class ScheduledMessages;
 class SendActionManager;
 class SponsoredMessages;
 class Reactions;
+class EmojiStatuses;
+class ForumIcons;
 class ChatFilters;
 class CloudThemes;
 class Streaming;
@@ -62,6 +63,14 @@ class DocumentMedia;
 class PhotoMedia;
 class Stickers;
 class GroupCall;
+class NotifySettings;
+class CustomEmojiManager;
+
+struct RepliesReadTillUpdate {
+	FullMsgId id;
+	MsgId readTillId;
+	bool out = false;
+};
 
 class Session final {
 public:
@@ -117,11 +126,24 @@ public:
 	[[nodiscard]] Reactions &reactions() const {
 		return *_reactions;
 	}
+	[[nodiscard]] EmojiStatuses &emojiStatuses() const {
+		return *_emojiStatuses;
+	}
+	[[nodiscard]] ForumIcons &forumIcons() const {
+		return *_forumIcons;
+	}
+	[[nodiscard]] NotifySettings &notifySettings() const {
+		return *_notifySettings;
+	}
+	[[nodiscard]] CustomEmojiManager &customEmojiManager() const {
+		return *_customEmojiManager;
+	}
 
 	[[nodiscard]] MsgId nextNonHistoryEntryId() {
 		return ++_nonHistoryEntryId;
 	}
 
+	void subscribeForTopicRepliesLists();
 	void clear();
 
 	void keepAlive(std::shared_ptr<PhotoMedia> media);
@@ -171,6 +193,9 @@ public:
 	void unregisterGroupCall(not_null<GroupCall*> call);
 	GroupCall *groupCall(CallId callId) const;
 
+	void watchForOffline(not_null<UserData*> user, TimeId now = 0);
+	void maybeStopWatchForOffline(not_null<UserData*> user);
+
 	[[nodiscard]] auto invitedToCallUsers(CallId callId) const
 		-> const base::flat_set<not_null<UserData*>> &;
 	void registerInvitedToCallUser(
@@ -189,7 +214,8 @@ public:
 
 	void enumerateUsers(Fn<void(not_null<UserData*>)> action) const;
 	void enumerateGroups(Fn<void(not_null<PeerData*>)> action) const;
-	void enumerateChannels(Fn<void(not_null<ChannelData*>)> action) const;
+	void enumerateBroadcasts(Fn<void(not_null<ChannelData*>)> action) const;
+	[[nodiscard]] UserData *userByPhone(const QString &phone) const;
 	[[nodiscard]] PeerData *peerByUsername(const QString &username) const;
 
 	[[nodiscard]] not_null<History*> history(PeerId peerId);
@@ -201,21 +227,19 @@ public:
 
 	void deleteConversationLocally(not_null<PeerData*> peer);
 
-	void cancelForwarding(not_null<History*> history);
-
 	[[nodiscard]] rpl::variable<bool> &contactsLoaded() {
 		return _contactsLoaded;
 	}
-	[[nodiscard]] rpl::producer<Data::Folder*> chatsListChanges() const {
+	[[nodiscard]] rpl::producer<Folder*> chatsListChanges() const {
 		return _chatsListChanged.events();
 	}
-	[[nodiscard]] bool chatsListLoaded(Data::Folder *folder = nullptr);
-	[[nodiscard]] rpl::producer<Data::Folder*> chatsListLoadedEvents() const {
+	[[nodiscard]] bool chatsListLoaded(Folder *folder = nullptr);
+	[[nodiscard]] rpl::producer<Folder*> chatsListLoadedEvents() const {
 		return _chatsListLoadedEvents.events();
 	}
 	void chatsListChanged(FolderId folderId);
-	void chatsListChanged(Data::Folder *folder);
-	void chatsListDone(Data::Folder *folder);
+	void chatsListChanged(Folder *folder);
+	void chatsListDone(Folder *folder);
 
 	void userIsBotChanged(not_null<UserData*> user);
 	[[nodiscard]] rpl::producer<not_null<UserData*>> userIsBotChanges() const;
@@ -226,11 +250,12 @@ public:
 		not_null<HistoryItem*> item;
 		not_null<bool*> isVisible;
 	};
-	[[nodiscard]] base::Observable<ItemVisibilityQuery> &queryItemVisibility() {
-		return _queryItemVisibility;
-	}
+	[[nodiscard]] bool queryItemVisibility(not_null<HistoryItem*> item) const;
+	[[nodiscard]] rpl::producer<ItemVisibilityQuery> itemVisibilityQueries() const;
+	void itemVisibilitiesUpdated();
+
 	struct IdChange {
-		not_null<HistoryItem*> item;
+		FullMsgId newId;
 		MsgId oldId = 0;
 	};
 	void notifyItemIdChange(IdChange event);
@@ -283,8 +308,7 @@ public:
 		int from,
 		int till);
 
-	void registerShownSpoiler(FullMsgId id);
-	void unregisterShownSpoiler(FullMsgId id);
+	void registerShownSpoiler(not_null<ViewElement*> view);
 	void hideShownSpoilers();
 
 	using MegagroupParticipant = std::tuple<
@@ -315,28 +339,43 @@ public:
 	void applyUpdate(const MTPDupdateChatDefaultBannedRights &update);
 
 	void applyDialogs(
-		Data::Folder *requestFolder,
+		Folder *requestFolder,
 		const QVector<MTPMessage> &messages,
 		const QVector<MTPDialog> &dialogs,
 		std::optional<int> count = std::nullopt);
 
-	int pinnedChatsCount(Data::Folder *folder, FilterId filterId) const;
-	int pinnedChatsLimit(Data::Folder *folder, FilterId filterId) const;
-	const std::vector<Dialogs::Key> &pinnedChatsOrder(
-		Data::Folder *folder,
-		FilterId filterId) const;
-	void setChatPinned(
-		const Dialogs::Key &key,
+	[[nodiscard]] bool pinnedCanPin(not_null<Thread*> thread) const;
+	[[nodiscard]] bool pinnedCanPin(
 		FilterId filterId,
-		bool pinned);
-	void clearPinnedChats(Data::Folder *folder);
+		not_null<History*> history) const;
+	[[nodiscard]] int pinnedChatsLimit(Folder *folder) const;
+	[[nodiscard]] int pinnedChatsLimit(FilterId filterId) const;
+	[[nodiscard]] int pinnedChatsLimit(not_null<Forum*> forum) const;
+	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
+		Folder *folder) const;
+	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
+		FilterId filterId) const;
+	[[nodiscard]] rpl::producer<int> maxPinnedChatsLimitValue(
+		not_null<Forum*> forum) const;
+	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
+		Folder *folder) const;
+	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
+		not_null<Forum*> forum) const;
+	[[nodiscard]] const std::vector<Dialogs::Key> &pinnedChatsOrder(
+		FilterId filterId) const;
+	void setChatPinned(Dialogs::Key key, FilterId filterId, bool pinned);
+	void setPinnedFromEntryList(Dialogs::Key key, bool pinned);
+	void clearPinnedChats(Folder *folder);
 	void applyPinnedChats(
-		Data::Folder *folder,
+		Folder *folder,
 		const QVector<MTPDialogPeer> &list);
+	void applyPinnedTopics(
+		not_null<Data::Forum*> forum,
+		const QVector<MTPint> &list);
 	void reorderTwoPinnedChats(
 		FilterId filterId,
-		const Dialogs::Key &key1,
-		const Dialogs::Key &key2);
+		Dialogs::Key key1,
+		Dialogs::Key key2);
 
 	void setSuggestToGigagroup(not_null<ChannelData*> group, bool suggest);
 	[[nodiscard]] bool suggestToGigagroup(
@@ -415,6 +454,11 @@ public:
 	void documentLoadDone(not_null<DocumentData*> document);
 	void documentLoadFail(not_null<DocumentData*> document, bool started);
 
+	[[nodiscard]] auto documentLoadProgress() const
+	-> rpl::producer<not_null<DocumentData*>> {
+		return _documentLoadProgress.events();
+	}
+
 	HistoryItem *addNewMessage(
 		const MTPMessage &data,
 		MessageFlags localFlags,
@@ -427,23 +471,15 @@ public:
 
 	[[nodiscard]] int unreadBadge() const;
 	[[nodiscard]] bool unreadBadgeMuted() const;
-	[[nodiscard]] int unreadBadgeIgnoreOne(const Dialogs::Key &key) const;
-	[[nodiscard]] bool unreadBadgeMutedIgnoreOne(
-		const Dialogs::Key &key) const;
+	[[nodiscard]] int unreadBadgeIgnoreOne(Dialogs::Key key) const;
+	[[nodiscard]] bool unreadBadgeMutedIgnoreOne(Dialogs::Key key) const;
 	[[nodiscard]] int unreadOnlyMutedBadge() const;
 	[[nodiscard]] rpl::producer<> unreadBadgeChanges() const;
 	void notifyUnreadBadgeChanged();
 
-	[[nodiscard]] std::optional<int> countUnreadRepliesLocally(
-		not_null<HistoryItem*> root,
-		MsgId afterId) const;
-	struct UnreadRepliesCountRequest {
-		not_null<HistoryItem*> root;
-		MsgId afterId = 0;
-		not_null<std::optional<int>*> result;
-	};
-	[[nodiscard]] auto unreadRepliesCountRequests() const
-		-> rpl::producer<UnreadRepliesCountRequest>;
+	void updateRepliesReadTill(RepliesReadTillUpdate update);
+	[[nodiscard]] auto repliesReadTillUpdates() const
+		-> rpl::producer<RepliesReadTillUpdate>;
 
 	void selfDestructIn(not_null<HistoryItem*> item, crl::time delay);
 
@@ -464,7 +500,8 @@ public:
 		const ImageWithLocation &small,
 		const ImageWithLocation &thumbnail,
 		const ImageWithLocation &large,
-		const ImageWithLocation &video,
+		const ImageWithLocation &videoSmall,
+		const ImageWithLocation &videoLarge,
 		crl::time videoStartTime);
 	void photoConvert(
 		not_null<PhotoData*> original,
@@ -489,8 +526,9 @@ public:
 		const InlineImageLocation &inlineThumbnail,
 		const ImageWithLocation &thumbnail,
 		const ImageWithLocation &videoThumbnail,
+		bool isPremiumSticker,
 		int32 dc,
-		int32 size);
+		int64 size);
 	void documentConvert(
 		not_null<DocumentData*> original,
 		const MTPDocument &data);
@@ -540,7 +578,7 @@ public:
 	not_null<PollData*> processPoll(const MTPPoll &data);
 	not_null<PollData*> processPoll(const MTPDmessageMediaPoll &data);
 
-	[[nodiscard]] not_null<Data::CloudImage*> location(
+	[[nodiscard]] not_null<CloudImage*> location(
 		const LocationPoint &point);
 
 	void registerPhotoItem(
@@ -620,10 +658,12 @@ public:
 	not_null<Folder*> processFolder(const MTPFolder &data);
 	not_null<Folder*> processFolder(const MTPDfolder &data);
 
+	[[nodiscard]] not_null<Dialogs::MainList*> chatsListFor(
+		not_null<Dialogs::Entry*> entry);
 	[[nodiscard]] not_null<Dialogs::MainList*> chatsList(
-		Data::Folder *folder = nullptr);
+		Folder *folder = nullptr);
 	[[nodiscard]] not_null<const Dialogs::MainList*> chatsList(
-		Data::Folder *folder = nullptr) const;
+		Folder *folder = nullptr) const;
 	[[nodiscard]] not_null<Dialogs::IndexedList*> contactsList();
 	[[nodiscard]] not_null<Dialogs::IndexedList*> contactsNoChatsList();
 
@@ -649,28 +689,6 @@ public:
 	void dialogsRowReplaced(DialogsRowReplacement replacement);
 	rpl::producer<DialogsRowReplacement> dialogsRowReplacements() const;
 
-	void requestNotifySettings(not_null<PeerData*> peer);
-	void applyNotifySetting(
-		const MTPNotifyPeer &notifyPeer,
-		const MTPPeerNotifySettings &settings);
-	void updateNotifySettings(
-		not_null<PeerData*> peer,
-		std::optional<int> muteForSeconds,
-		std::optional<bool> silentPosts = std::nullopt);
-	void resetNotifySettingsToDefault(not_null<PeerData*> peer);
-	bool notifyIsMuted(
-		not_null<const PeerData*> peer,
-		crl::time *changesIn = nullptr) const;
-	bool notifySilentPosts(not_null<const PeerData*> peer) const;
-	bool notifyMuteUnknown(not_null<const PeerData*> peer) const;
-	bool notifySilentPostsUnknown(not_null<const PeerData*> peer) const;
-	bool notifySettingsUnknown(not_null<const PeerData*> peer) const;
-	rpl::producer<> defaultUserNotifyUpdates() const;
-	rpl::producer<> defaultChatNotifyUpdates() const;
-	rpl::producer<> defaultBroadcastNotifyUpdates() const;
-	rpl::producer<> defaultNotifyUpdates(
-		not_null<const PeerData*> peer) const;
-
 	void serviceNotification(
 		const TextWithEntities &message,
 		const MTPMessageMedia &media = MTP_messageMediaEmpty());
@@ -688,6 +706,12 @@ public:
 	const std::vector<WallPaper> &wallpapers() const;
 	uint64 wallpapersHash() const;
 
+	struct WebViewResultSent {
+		uint64 queryId = 0;
+	};
+	void webViewResultSent(WebViewResultSent &&sent);
+	[[nodiscard]] rpl::producer<WebViewResultSent> webViewResultSent() const;
+
 	void clearLocalStorage();
 
 private:
@@ -701,6 +725,7 @@ private:
 	void setupUserIsContactViewer();
 
 	void checkSelfDestructItems();
+	void checkLocalUsersWentOffline();
 
 	void scheduleNextTTLs();
 	void checkTTLs();
@@ -708,16 +733,16 @@ private:
 	int computeUnreadBadge(const Dialogs::UnreadState &state) const;
 	bool computeUnreadBadgeMuted(const Dialogs::UnreadState &state) const;
 
-	void applyDialog(Data::Folder *requestFolder, const MTPDdialog &data);
+	void applyDialog(Folder *requestFolder, const MTPDdialog &data);
 	void applyDialog(
-		Data::Folder *requestFolder,
+		Folder *requestFolder,
 		const MTPDdialogFolder &data);
 
 	const Messages *messagesList(PeerId peerId) const;
 	not_null<Messages*> messagesListForInsert(PeerId peerId);
 	not_null<HistoryItem*> registerMessage(
 		std::unique_ptr<HistoryItem> item);
-	void changeMessageId(PeerId peerId, MsgId wasId, MsgId nowId);
+	HistoryItem *changeMessageId(PeerId peerId, MsgId wasId, MsgId nowId);
 	void removeDependencyMessage(not_null<HistoryItem*> item);
 
 	void photoApplyFields(
@@ -737,7 +762,8 @@ private:
 		const ImageWithLocation &small,
 		const ImageWithLocation &thumbnail,
 		const ImageWithLocation &large,
-		const ImageWithLocation &video,
+		const ImageWithLocation &videoSmall,
+		const ImageWithLocation &videoLarge,
 		crl::time videoStartTime);
 
 	void documentApplyFields(
@@ -756,8 +782,9 @@ private:
 		const InlineImageLocation &inlineThumbnail,
 		const ImageWithLocation &thumbnail,
 		const ImageWithLocation &videoThumbnail,
+		bool isPremiumSticker,
 		int32 dc,
-		int32 size);
+		int64 size);
 	DocumentData *documentFromWeb(
 		const MTPDwebDocument &data,
 		const ImageLocation &thumbnailLocation,
@@ -797,15 +824,6 @@ private:
 		PhotoData *photo,
 		DocumentData *document);
 
-	void setPinnedFromDialog(const Dialogs::Key &key, bool pinned);
-
-	NotifySettings &defaultNotifySettings(not_null<const PeerData*> peer);
-	const NotifySettings &defaultNotifySettings(
-		not_null<const PeerData*> peer) const;
-	void unmuteByFinished();
-	void unmuteByFinishedDelayed(crl::time delay);
-	void updateNotifySettingsLocal(not_null<PeerData*> peer);
-
 	template <typename Method>
 	void enumerateItemViews(
 		not_null<const HistoryItem*> item,
@@ -829,11 +847,11 @@ private:
 	QPointer<Ui::BoxContent> _exportSuggestion;
 
 	rpl::variable<bool> _contactsLoaded = false;
-	rpl::event_stream<Data::Folder*> _chatsListLoadedEvents;
-	rpl::event_stream<Data::Folder*> _chatsListChanged;
+	rpl::event_stream<Folder*> _chatsListLoadedEvents;
+	rpl::event_stream<Folder*> _chatsListChanged;
 	rpl::event_stream<not_null<UserData*>> _userIsBotChanges;
 	rpl::event_stream<not_null<PeerData*>> _botCommandsChanges;
-	base::Observable<ItemVisibilityQuery> _queryItemVisibility;
+	rpl::event_stream<ItemVisibilityQuery> _itemVisibilityQueries;
 	rpl::event_stream<IdChange> _itemIdChanges;
 	rpl::event_stream<not_null<const HistoryItem*>> _itemLayoutChanges;
 	rpl::event_stream<not_null<const ViewElement*>> _viewLayoutChanges;
@@ -857,7 +875,7 @@ private:
 	rpl::event_stream<DialogsRowReplacement> _dialogsRowReplacements;
 	rpl::event_stream<ChatListEntryRefresh> _chatListEntryRefreshes;
 	rpl::event_stream<> _unreadBadgeChanges;
-	rpl::event_stream<UnreadRepliesCountRequest> _unreadRepliesCountRequests;
+	rpl::event_stream<RepliesReadTillUpdate> _repliesReadTillUpdates;
 
 	Dialogs::MainList _chatsList;
 	Dialogs::IndexedList _contactsList;
@@ -902,7 +920,7 @@ private:
 		base::flat_set<not_null<ViewElement*>>> _webpageViews;
 	std::unordered_map<
 		LocationPoint,
-		std::unique_ptr<Data::CloudImage>> _locations;
+		std::unique_ptr<CloudImage>> _locations;
 	std::unordered_map<
 		PollId,
 		std::unique_ptr<PollData>> _polls;
@@ -929,6 +947,7 @@ private:
 
 	rpl::event_stream<not_null<WebPageData*>> _webpageUpdates;
 	rpl::event_stream<not_null<ChannelData*>> _channelDifferenceTooLong;
+	rpl::event_stream<not_null<DocumentData*>> _documentLoadProgress;
 	base::flat_set<not_null<ChannelData*>> _suggestToGigagroup;
 
 	base::flat_multi_map<TimeId, not_null<PollData*>> _pollsClosings;
@@ -948,18 +967,9 @@ private:
 	rpl::event_stream<InviteToCall> _invitesToCalls;
 	base::flat_map<uint64, base::flat_set<not_null<UserData*>>> _invitedToCallUsers;
 
-	base::flat_set<not_null<HistoryItem*>> _shownSpoilers;
+	base::flat_set<not_null<ViewElement*>> _shownSpoilers;
 
 	History *_topPromoted = nullptr;
-
-	NotifySettings _defaultUserNotifySettings;
-	NotifySettings _defaultChatNotifySettings;
-	NotifySettings _defaultBroadcastNotifySettings;
-	rpl::event_stream<> _defaultUserNotifyUpdates;
-	rpl::event_stream<> _defaultChatNotifyUpdates;
-	rpl::event_stream<> _defaultBroadcastNotifyUpdates;
-	std::unordered_set<not_null<const PeerData*>> _mutedPeers;
-	base::Timer _unmuteByFinishedTimer;
 
 	std::unordered_map<PeerId, std::unique_ptr<PeerData>> _peers;
 
@@ -973,6 +983,11 @@ private:
 	std::vector<WallPaper> _wallpapers;
 	uint64 _wallpapersHash = 0;
 
+	base::flat_map<not_null<UserData*>, TimeId> _watchingForOffline;
+	base::Timer _watchForOfflineTimer;
+
+	rpl::event_stream<WebViewResultSent> _webViewResultSent;
+
 	Groups _groups;
 	const std::unique_ptr<ChatFilters> _chatsFilters;
 	std::unique_ptr<ScheduledMessages> _scheduledMessages;
@@ -984,8 +999,12 @@ private:
 	const std::unique_ptr<Stickers> _stickers;
 	std::unique_ptr<SponsoredMessages> _sponsoredMessages;
 	const std::unique_ptr<Reactions> _reactions;
+	const std::unique_ptr<EmojiStatuses> _emojiStatuses;
+	const std::unique_ptr<ForumIcons> _forumIcons;
+	const std::unique_ptr<NotifySettings> _notifySettings;
+	const std::unique_ptr<CustomEmojiManager> _customEmojiManager;
 
-	MsgId _nonHistoryEntryId = ServerMaxMsgId;
+	MsgId _nonHistoryEntryId = ServerMaxMsgId.bare + ScheduledMsgIdsRange;
 
 	rpl::lifetime _lifetime;
 

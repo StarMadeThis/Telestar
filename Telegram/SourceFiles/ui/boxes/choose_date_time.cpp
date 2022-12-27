@@ -22,7 +22,7 @@ namespace Ui {
 namespace {
 
 constexpr auto kMinimalSchedule = TimeId(10);
-/*
+
 tr::phrase<> MonthDay(int index) {
 	switch (index) {
 	case 1: return tr::lng_month_day1;
@@ -40,10 +40,14 @@ tr::phrase<> MonthDay(int index) {
 	}
 	Unexpected("Index in MonthDay.");
 }
-*/
 
 QString DayString(const QDate &date) {
-	return langDayOfMonthFull(date);
+	return tr::lng_month_day(
+		tr::now,
+		lt_month,
+		MonthDay(date.month())(tr::now),
+		lt_day,
+		QString::number(date.day()));
 }
 
 QString TimeString(QTime time) {
@@ -53,6 +57,15 @@ QString TimeString(QTime time) {
 }
 
 } // namespace
+
+ChooseDateTimeStyleArgs::ChooseDateTimeStyleArgs()
+: labelStyle(&st::boxLabel)
+, dateFieldStyle(&st::scheduleDateField)
+, timeFieldStyle(&st::scheduleTimeField)
+, separatorStyle(&st::scheduleTimeSeparator)
+, atStyle(&st::scheduleAtLabel)
+, calendarStyle(&st::defaultCalendarColors) {
+}
 
 ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 		not_null<GenericBox*> box,
@@ -72,25 +85,25 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 		box->addRow(object_ptr<FlatLabel>(
 			box,
 			std::move(args.description),
-			st::boxLabel));
+			*args.style.labelStyle));
 	}
 	const auto parsed = base::unixtime::parse(args.time);
 	const auto state = box->lifetime().make_state<State>(State{
 		.date = parsed.date(),
 		.day = CreateChild<InputField>(
 			content,
-			st::scheduleDateField),
+			*args.style.dateFieldStyle),
 		.time = CreateChild<TimeInput>(
 			content,
 			TimeString(parsed.time()),
-			st::scheduleTimeField,
-			st::scheduleDateField,
-			st::scheduleTimeSeparator,
+			*args.style.timeFieldStyle,
+			*args.style.dateFieldStyle,
+			*args.style.separatorStyle,
 			st::scheduleTimeSeparatorPadding),
 		.at = CreateChild<FlatLabel>(
 			content,
 			tr::lng_schedule_at(),
-			st::scheduleAtLabel),
+			*args.style.atStyle),
 	});
 
 	state->date.value(
@@ -151,6 +164,7 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 
 	const auto calendar =
 		content->lifetime().make_state<QPointer<CalendarBox>>();
+	const auto calendarStyle = args.style.calendarStyle;
 	QObject::connect(state->day, &InputField::focused, [=] {
 		if (*calendar) {
 			return;
@@ -165,6 +179,7 @@ ChooseDateTimeBoxDescriptor ChooseDateTimeBox(
 				}),
 				.minDate = minDate(),
 				.maxDate = maxDate(),
+				.stColors = *calendarStyle,
 			}));
 		(*calendar)->boxClosing(
 		) | rpl::start_with_next(crl::guard(state->time, [=] {

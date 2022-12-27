@@ -23,7 +23,7 @@ MTPVector<MTPDocumentAttribute> ComposeSendingDocumentAttributes(
 	auto attributes = QVector<MTPDocumentAttribute>(1, filenameAttribute);
 	if (dimensions.width() > 0 && dimensions.height() > 0) {
 		const auto duration = document->getDuration();
-		if (duration >= 0 && !document->hasMimeType(qstr("image/gif"))) {
+		if (duration >= 0 && !document->hasMimeType(u"image/gif"_q)) {
 			auto flags = MTPDdocumentAttributeVideo::Flags(0);
 			using VideoFlag = MTPDdocumentAttributeVideo::Flag;
 			if (document->isVideoMessage()) {
@@ -83,7 +83,7 @@ MTPInputMedia PrepareUploadedPhoto(RemoteFileInfo info) {
 		MTP_flags(flags),
 		info.file,
 		MTP_vector<MTPInputDocument>(
-			ranges::to<QVector>(info.attachedStickers)),
+			ranges::to<QVector<MTPInputDocument>>(info.attachedStickers)),
 		MTP_int(0));
 }
 
@@ -107,7 +107,7 @@ MTPInputMedia PrepareUploadedDocument(
 		MTP_string(document->mimeString()),
 		ComposeSendingDocumentAttributes(document),
 		MTP_vector<MTPInputDocument>(
-			ranges::to<QVector>(info.attachedStickers)),
+			ranges::to<QVector<MTPInputDocument>>(info.attachedStickers)),
 		MTP_int(0));
 }
 

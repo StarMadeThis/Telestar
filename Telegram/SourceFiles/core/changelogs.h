@@ -20,13 +20,12 @@ namespace Core {
 
 class Changelogs final : public base::has_weak_ptr {
 public:
-	Changelogs(not_null<Main::Session*> session, int oldVersion, int oldKotatoVersion);
+	Changelogs(not_null<Main::Session*> session, int oldVersion);
 
 	static std::unique_ptr<Changelogs> Create(
 		not_null<Main::Session*> session);
 
 private:
-	void addKotatoLogs();
 	void requestCloudLogs();
 	void addLocalLogs();
 	void addLocalLog(const QString &text);
@@ -35,7 +34,6 @@ private:
 
 	const not_null<Main::Session*> _session;
 	const int _oldVersion = 0;
-	const int _oldKotatoVersion = 0;
 	rpl::lifetime _chatsSubscription;
 	bool _addedSomeLocal = false;
 

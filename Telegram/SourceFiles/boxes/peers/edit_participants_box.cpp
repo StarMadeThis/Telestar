@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/peers/edit_participants_box.h"
 
-#include "kotato/kotato_lang.h"
 #include "api/api_chat_participants.h"
 #include "boxes/peer_list_controllers.h"
 #include "boxes/peers/edit_participant_box.h"
@@ -17,11 +16,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/max_invite_box.h"
 #include "boxes/add_contact_box.h"
 #include "main/main_session.h"
+#include "menu/menu_antispam_validator.h"
 #include "mtproto/mtproto_config.h"
-#include "facades.h"
 #include "apiwrap.h"
 #include "lang/lang_keys.h"
-#include "mainwindow.h"
 #include "mainwidget.h"
 #include "dialogs/dialogs_indexed_list.h"
 #include "data/data_peer_values.h"
@@ -33,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/ui_utility.h"
+#include "info/profile/info_profile_values.h"
 #include "window/window_session_controller.h"
 #include "history/history.h"
 #include "styles/style_menu_icons.h"
@@ -114,7 +113,7 @@ void SaveChatAdmin(
 		const auto &type = error.type();
 		if (retryOnNotParticipant
 			&& isAdmin
-			&& (type == qstr("USER_NOT_PARTICIPANT"))) {
+			&& (type == u"USER_NOT_PARTICIPANT"_q)) {
 			AddChatParticipant(chat, user, [=] {
 				SaveChatAdmin(chat, user, isAdmin, onDone, onFail, false);
 			}, onFail);
@@ -1020,15 +1019,14 @@ void ParticipantsBoxController::addNewItem() {
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
 	};
 
-	_addBox = Ui::show(
+	_addBox = showBox(
 		Box<PeerListBox>(
 			std::make_unique<AddSpecialBoxController>(
 				_peer,
 				_role,
 				adminDone,
 				restrictedDone),
-			initBox),
-		Ui::LayerOption::KeepOther);
+			initBox));
 }
 
 void ParticipantsBoxController::addNewParticipants() {
@@ -1055,7 +1053,7 @@ void ParticipantsBoxController::addNewParticipants() {
 			channel,
 			{ already.begin(), already.end() });
 	} else {
-		Ui::show(Box<MaxInviteBox>(channel), Ui::LayerOption::KeepOther);
+		showBox(Box<MaxInviteBox>(channel));
 	}
 }
 
@@ -1189,6 +1187,15 @@ void ParticipantsBoxController::prepare() {
 		}
 		Unexpected("Role in ParticipantsBoxController::prepare()");
 	}();
+	if (const auto megagroup = _peer->asMegagroup()) {
+		if ((_role == Role::Admins)
+			&& (megagroup->amCreator() || megagroup->hasAdminRights())) {
+			const auto validator = AntiSpamMenu::AntiSpamValidator(
+				_navigation->parentController(),
+				_peer->asChannel());
+			delegate()->peerListSetAboveWidget(validator.createButton());
+		}
+	}
 	delegate()->peerListSetSearchMode(PeerListSearchMode::Enabled);
 	delegate()->peerListSetTitle(std::move(title));
 	setDescriptionText(tr::lng_contacts_loading(tr::now));
@@ -1205,6 +1212,13 @@ void ParticipantsBoxController::prepare() {
 			delegate());
 	}
 	delegate()->peerListRefreshRows();
+}
+
+QPointer<Ui::BoxContent> ParticipantsBoxController::showBox(
+		object_ptr<Ui::BoxContent> box) const {
+	const auto weak = Ui::MakeWeak(box.data());
+	delegate()->peerListShowBox(std::move(box), Ui::LayerOption::KeepOther);
+	return weak;
 }
 
 void ParticipantsBoxController::prepareChatRows(not_null<ChatData*> chat) {
@@ -1294,7 +1308,7 @@ void ParticipantsBoxController::rebuildChatAdmins(
 		list.emplace_back(creator);
 	}
 	ranges::sort(list, [](not_null<UserData*> a, not_null<UserData*> b) {
-		return (a->name.compare(b->name, Qt::CaseInsensitive) < 0);
+		return (a->name().compare(b->name(), Qt::CaseInsensitive) < 0);
 	});
 
 	const auto same = [&] {
@@ -1541,28 +1555,6 @@ base::unique_qptr<Ui::PopupMenu> ParticipantsBoxController::rowContextMenu(
 				? &st::menuIconProfile
 				: &st::menuIconInfo));
 	}
-	if (const auto window = App::wnd()) {
-		if (const auto mainwidget = window->sessionContent()) {
-			result->addAction(
-				ktr("ktg_context_show_messages_from"),
-				crl::guard(this, [=] {
-					mainwidget->searchMessages(
-						" ",
-						(_peer && !_peer->isUser())
-							? _peer->owner().history(_peer).get()
-							: Dialogs::Key(),
-							user);
-				}), &st::menuIconSearch);
-			if (const auto openedPeer = mainwidget->peer()) {
-				if (openedPeer->canWrite() && participant->isUser()) {
-					result->addAction(
-						ktr("ktg_profile_mention_user"),
-						crl::guard(this, [=] { mainwidget->mentionUser(user); }),
-						&st::menuIconMention);
-				}
-			}
-		}
-	}
 	if (_role == Role::Kicked) {
 		if (_peer->isMegagroup()
 			&& _additional.canRestrictParticipant(participant)) {
@@ -1627,20 +1619,6 @@ void ParticipantsBoxController::showAdmin(not_null<UserData*> user) {
 		user,
 		currentRights,
 		_additional.adminRank(user));
-	if (const auto by = _additional.adminPromotedBy(user)) {
-		box->setCustomStatus(tr::lng_channel_admin_status_promoted_by(
-			tr::now,
-			lt_user,
-			by->name));
-	} else {
-		if (_additional.isCreator(user)) {
-			box->setCustomStatus(
-				tr::lng_channel_admin_status_creator(tr::now));
-		} else {
-			box->setCustomStatus(
-				tr::lng_channel_admin_status_not_admin(tr::now));
-		}
-	}
 	if (_additional.canAddOrEditAdmin(user)) {
 		const auto done = crl::guard(this, [=](
 				ChatAdminRightsInfo newRights,
@@ -1654,7 +1632,7 @@ void ParticipantsBoxController::showAdmin(not_null<UserData*> user) {
 		});
 		box->setSaveCallback(SaveAdminCallback(_peer, user, done, fail));
 	}
-	_editParticipantBox = Ui::show(std::move(box), Ui::LayerOption::KeepOther);
+	_editParticipantBox = showBox(std::move(box));
 }
 
 void ParticipantsBoxController::editAdminDone(
@@ -1708,7 +1686,7 @@ void ParticipantsBoxController::showRestricted(not_null<UserData*> user) {
 		box->setSaveCallback(
 			SaveRestrictedCallback(_peer, user, done, fail));
 	}
-	_editParticipantBox = Ui::show(std::move(box), Ui::LayerOption::KeepOther);
+	_editParticipantBox = showBox(std::move(box));
 }
 
 void ParticipantsBoxController::editRestrictedDone(
@@ -1755,13 +1733,15 @@ void ParticipantsBoxController::kickParticipant(not_null<PeerData*> participant)
 		: tr::lng_profile_sure_kick_channel)(
 			tr::now,
 			lt_user,
-			user ? user->firstName : participant->name);
-	_editBox = Ui::show(
-		Box<Ui::ConfirmBox>(
-			text,
-			tr::lng_box_remove(tr::now),
-			crl::guard(this, [=] { kickParticipantSure(participant); })),
-		Ui::LayerOption::KeepOther);
+			user ? user->firstName : participant->name());
+	_editBox = showBox(
+		Ui::MakeConfirmBox({
+			.text = text,
+			.confirmed = crl::guard(this, [=] {
+				kickParticipantSure(participant);
+			}),
+			.confirmText = tr::lng_box_remove(),
+		}));
 }
 
 void ParticipantsBoxController::unkickParticipant(not_null<UserData*> user) {
@@ -1798,15 +1778,15 @@ void ParticipantsBoxController::kickParticipantSure(
 }
 
 void ParticipantsBoxController::removeAdmin(not_null<UserData*> user) {
-	_editBox = Ui::show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_profile_sure_remove_admin(
+	_editBox = showBox(
+		Ui::MakeConfirmBox({
+			.text = tr::lng_profile_sure_remove_admin(
 				tr::now,
 				lt_user,
 				user->firstName),
-			tr::lng_box_remove(tr::now),
-			crl::guard(this, [=] { removeAdminSure(user); })),
-		Ui::LayerOption::KeepOther);
+			.confirmed = crl::guard(this, [=] { removeAdminSure(user); }),
+			.confirmText = tr::lng_box_remove(),
+		}));
 }
 
 void ParticipantsBoxController::removeAdminSure(not_null<UserData*> user) {
@@ -1926,17 +1906,10 @@ std::unique_ptr<PeerListRow> ParticipantsBoxController::createRow(
 	refreshCustomStatus(row.get());
 	if (_role == Role::Admins
 		&& user
-		&& (_additional.adminRights(user).has_value()
-			|| _additional.isCreator(user))) {
-		if (_additional.canEditAdmin(user) && !_additional.isCreator(user)) {
-			row->setActionLink(tr::lng_profile_kick(tr::now));
-		}
-		row->setAdminRank(channel
-			? channel->adminRank(user)
-			: (chat && _additional.isCreator(user))
-				? tr::lng_owner_badge(tr::now)
-				: QString(),
-			_additional.isCreator(user));
+		&& !_additional.isCreator(user)
+		&& _additional.adminRights(user).has_value()
+		&& _additional.canEditAdmin(user)) {
+		row->setActionLink(tr::lng_profile_kick(tr::now));
 	} else if (_role == Role::Kicked || _role == Role::Restricted) {
 		if (_additional.canRestrictParticipant(participant)) {
 			row->setActionLink(tr::lng_profile_delete_removed(tr::now));
@@ -1968,12 +1941,7 @@ auto ParticipantsBoxController::computeType(
 		: (user && _additional.adminRights(user).has_value())
 		? Rights::Admin
 		: Rights::Normal;
-	result.canRemove = _additional.canRemoveParticipant(participant);
-	if (user) {
-		if (const auto channel = _peer->asChannel()) {
-			result.adminRank = channel->adminRank(user);
-		}
-	}
+	result.adminRank = user ? _additional.adminRank(user) : QString();
 	return result;
 }
 
@@ -1982,7 +1950,8 @@ void ParticipantsBoxController::recomputeTypeFor(
 	if (_role != Role::Profile) {
 		return;
 	}
-	if (const auto row = delegate()->peerListFindRow(participant->id.value)) {
+	const auto row = delegate()->peerListFindRow(participant->id.value);
+	if (row) {
 		static_cast<Row*>(row)->setType(computeType(participant));
 	}
 }
@@ -1990,14 +1959,14 @@ void ParticipantsBoxController::recomputeTypeFor(
 void ParticipantsBoxController::refreshCustomStatus(
 		not_null<PeerListRow*> row) const {
 	const auto participant = row->peer();
-	/* const auto user = participant->asUser();
+	const auto user = participant->asUser();
 	if (_role == Role::Admins) {
 		Assert(user != nullptr);
 		if (const auto by = _additional.adminPromotedBy(user)) {
 			row->setCustomStatus(tr::lng_channel_admin_status_promoted_by(
 				tr::now,
 				lt_user,
-				by->name));
+				by->name()));
 		} else {
 			if (_additional.isCreator(user)) {
 				row->setCustomStatus(
@@ -2007,14 +1976,14 @@ void ParticipantsBoxController::refreshCustomStatus(
 					tr::lng_channel_admin_status_not_admin(tr::now));
 			}
 		}
-	} else */if (_role == Role::Kicked || _role == Role::Restricted) {
+	} else if (_role == Role::Kicked || _role == Role::Restricted) {
 		const auto by = _additional.restrictedBy(participant);
 		row->setCustomStatus((_role == Role::Kicked
 			? tr::lng_channel_banned_status_removed_by
 			: tr::lng_channel_banned_status_restricted_by)(
 				tr::now,
 				lt_user,
-				by ? by->name : "Unknown"));
+				by ? by->name() : "Unknown"));
 	}
 }
 

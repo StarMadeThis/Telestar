@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/crash_reports.h"
 
-#include "kotato/kotato_settings.h"
-#include "kotato/kotato_version.h"
 #include "platform/platform_specific.h"
 #include "base/platform/base_platform_info.h"
 #include "core/launcher.h"
@@ -20,9 +18,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #ifndef DESKTOP_APP_DISABLE_CRASH_REPORTS
 #ifdef Q_OS_WIN
 
+#include <new.h>
+
 #pragma warning(push)
 #pragma warning(disable:4091)
-#include "client/windows/handler/exception_handler.h"
+#include <client/windows/handler/exception_handler.h>
 #pragma warning(pop)
 
 #elif defined Q_OS_UNIX // Q_OS_WIN
@@ -36,14 +36,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <unistd.h>
 
 #ifdef MAC_USE_BREAKPAD
-#include "client/mac/handler/exception_handler.h"
+#include <client/mac/handler/exception_handler.h>
 #else // MAC_USE_BREAKPAD
-#include "client/crashpad_client.h"
+#include <client/crashpad_client.h>
 #endif // else for MAC_USE_BREAKPAD
 
 #else // Q_OS_MAC
 
-#include "client/linux/handler/exception_handler.h"
+#include <client/linux/handler/exception_handler.h>
 
 #endif // Q_OS_MAC
 
@@ -107,11 +107,20 @@ std::unique_ptr<ReservedMemoryChunk> ReservedMemory;
 
 void InstallOperatorNewHandler() {
 	ReservedMemory = std::make_unique<ReservedMemoryChunk>();
+#ifdef Q_OS_WIN
+	_set_new_handler([](size_t requested) -> int {
+		_set_new_handler(nullptr);
+		ReservedMemory.reset();
+		CrashReports::SetAnnotation("Requested", QString::number(requested));
+		Unexpected("Could not allocate!");
+	});
+#else // Q_OS_WIN
 	std::set_new_handler([] {
 		std::set_new_handler(nullptr);
 		ReservedMemory.reset();
 		Unexpected("Could not allocate!");
 	});
+#endif // Q_OS_WIN
 }
 
 void InstallQtMessageHandler() {
@@ -291,18 +300,18 @@ bool DumpCallback(const google_breakpad::MinidumpDescriptor &md, void *context, 
 QString PlatformString() {
 	if (Platform::IsWindowsStoreBuild()) {
 		return Platform::IsWindows64Bit()
-			? qsl("WinStore64Bit")
-			: qsl("WinStore32Bit");
+			? u"WinStore64Bit"_q
+			: u"WinStore32Bit"_q;
 	} else if (Platform::IsWindows32Bit()) {
-		return qsl("Windows32Bit");
+		return u"Windows32Bit"_q;
 	} else if (Platform::IsWindows64Bit()) {
-		return qsl("Windows64Bit");
+		return u"Windows64Bit"_q;
 	} else if (Platform::IsMacStoreBuild()) {
-		return qsl("MacAppStore");
+		return u"MacAppStore"_q;
 	} else if (Platform::IsMac()) {
-		return qsl("MacOS");
+		return u"MacOS"_q;
 	} else if (Platform::IsLinux()) {
-		return qsl("Linux");
+		return u"Linux"_q;
 	}
 	Unexpected("Platform in CrashReports::PlatformString.");
 }
@@ -310,13 +319,17 @@ QString PlatformString() {
 void StartCatching(not_null<Core::Launcher*> launcher) {
 #ifndef DESKTOP_APP_DISABLE_CRASH_REPORTS
 	ProcessAnnotations["Binary"] = cExeName().toUtf8().constData();
-	ProcessAnnotations["ApiId"] = QString::number(::Kotato::JsonSettings::GetInt("api_id")).toUtf8().constData();
-	ProcessAnnotations["Version"] = (cAlphaVersion() ? qsl("%1 %2").arg(cAlphaVersion()).arg(AppKotatoTestBranch) : (AppBetaVersion ? qsl("%1 beta") : qsl("%1")).arg(AppKotatoVersion)).toUtf8().constData();
+	ProcessAnnotations["ApiId"] = QString::number(ApiId).toUtf8().constData();
+	ProcessAnnotations["Version"] = (cAlphaVersion()
+		? u"%1 alpha"_q.arg(cAlphaVersion())
+		: (AppBetaVersion
+			? u"%1 beta"_q
+			: u"%1"_q).arg(AppVersion)).toUtf8().constData();
 	ProcessAnnotations["Launched"] = QDateTime::currentDateTime().toString("dd.MM.yyyy hh:mm:ss").toUtf8().constData();
 	ProcessAnnotations["Platform"] = PlatformString().toUtf8().constData();
 	ProcessAnnotations["UserTag"] = QString::number(launcher->installationTag(), 16).toUtf8().constData();
 
-	QString dumpspath = cWorkingDir() + qsl("tdata/dumps");
+	QString dumpspath = cWorkingDir() + u"tdata/dumps"_q;
 	QDir().mkpath(dumpspath);
 
 #ifdef Q_OS_WIN
@@ -347,7 +360,7 @@ void StartCatching(not_null<Core::Launcher*> launcher) {
 	SetSignalHandlers = false;
 #else // MAC_USE_BREAKPAD
 	crashpad::CrashpadClient crashpad_client;
-	std::string handler = (cExeDir() + cExeName() + qsl("/Contents/Helpers/crashpad_handler")).toUtf8().constData();
+	std::string handler = (cExeDir() + cExeName() + u"/Contents/Helpers/crashpad_handler"_q).toUtf8().constData();
 	std::string database = QFile::encodeName(dumpspath).constData();
 	if (crashpad_client.StartHandler(
 			base::FilePath(handler),
@@ -385,7 +398,7 @@ void FinishCatching() {
 
 StartResult Start() {
 #ifndef DESKTOP_APP_DISABLE_CRASH_REPORTS
-	ReportPath = cWorkingDir() + qsl("tdata/working");
+	ReportPath = cWorkingDir() + u"tdata/working"_q;
 
 #ifdef Q_OS_WIN
 	FILE *f = nullptr;
@@ -404,7 +417,7 @@ StartResult Start() {
 		fclose(f);
 
 		LOG(("Opened '%1' for reading, the previous "
-			"Kotatogram Desktop launch was not finished properly :( "
+			"Telegram Desktop launch was not finished properly :( "
 			"Crash log size: %2").arg(ReportPath).arg(lastdump.size()));
 
 		return lastdump;

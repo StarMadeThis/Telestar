@@ -9,24 +9,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_common.h"
 #include "chat_helpers/gifs_list_widget.h" // ChatHelpers::AddGifAction
-#include "chat_helpers/send_context_menu.h" // SendMenu::FillSendMenu
+#include "menu/menu_send.h" // SendMenu::FillSendMenu
 #include "core/click_handler_types.h"
+#include "data/data_document.h"
 #include "data/data_file_origin.h"
 #include "data/data_user.h"
 #include "data/data_changes.h"
 #include "data/data_chat_participant_status.h"
+#include "data/data_session.h"
 #include "inline_bots/inline_bot_result.h"
 #include "inline_bots/inline_bot_layout_item.h"
 #include "lang/lang_keys.h"
 #include "layout/layout_position.h"
 #include "mainwindow.h"
-#include "facades.h"
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/painter.h"
 #include "history/view/history_view_cursor_state.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
@@ -250,7 +252,7 @@ void Inner::mouseReleaseEvent(QMouseEvent *e) {
 		ActivateClickHandler(window(), activated, {
 			e->button(),
 			QVariant::fromValue(ClickHandlerContext{
-				.sessionWindow = base::make_weak(_controller.get()),
+				.sessionWindow = base::make_weak(_controller),
 			})
 		});
 	}
@@ -259,12 +261,36 @@ void Inner::mouseReleaseEvent(QMouseEvent *e) {
 void Inner::selectInlineResult(
 		int index,
 		Api::SendOptions options,
-		bool open,
-		bool sendPreview) {
+		bool open) {
 	const auto item = _mosaic.maybeItemAt(index);
 	if (!item) {
 		return;
 	}
+	const auto messageSendingFrom = [&]() -> Ui::MessageSendingAnimationFrom {
+		const auto document = item->getDocument()
+			? item->getDocument()
+			: item->getPreviewDocument();
+		if (options.scheduled
+			|| item->isFullLine()
+			|| !document
+			|| (!document->sticker() && !document->isGifv())) {
+			return {};
+		}
+		using Type = Ui::MessageSendingAnimationFrom::Type;
+		const auto type = document->sticker()
+			? Type::Sticker
+			: document->isGifv()
+			? Type::Gif
+			: Type::None;
+		const auto rect = item->innerContentRect().translated(
+			_mosaic.findRect(index).topLeft());
+		return {
+			.type = type,
+			.localId = _controller->session().data().nextLocalMessageId(),
+			.globalStartGeometry = mapToGlobal(rect),
+			.crop = document->isGifv(),
+		};
+	};
 
 	if (const auto inlineResult = item->getResult()) {
 		if (inlineResult->onChoose(item)) {
@@ -272,8 +298,8 @@ void Inner::selectInlineResult(
 				.result = inlineResult,
 				.bot = _inlineBot,
 				.options = std::move(options),
+				.messageSendingFrom = messageSendingFrom(),
 				.open = open,
-				.sendPreview = sendPreview,
 			});
 		}
 	}
@@ -319,32 +345,18 @@ void Inner::contextMenuEvent(QContextMenuEvent *e) {
 		SendMenu::DefaultSilentCallback(send),
 		SendMenu::DefaultScheduleCallback(this, type, send));
 
-	const auto hideViaActions = [&] {
-		const auto sendPreview = [=, selected = _selected](Api::SendOptions options) {
-			selectInlineResult(selected, options, false, true);
-		};
-
-		SendMenu::FillSendPreviewMenu(
-			_menu,
-			type,
-			[=] { sendPreview({}); },
-			SendMenu::DefaultSilentCallback(sendPreview),
-			SendMenu::DefaultScheduleCallback(this, type, sendPreview));
-	};
-
 	const auto item = _mosaic.itemAt(_selected);
 	if (const auto previewDocument = item->getPreviewDocument()) {
-		hideViaActions();
-
 		auto callback = [&](
 				const QString &text,
 				Fn<void()> &&done,
 				const style::icon *icon) {
 			_menu->addAction(text, std::move(done), icon);
 		};
-		ChatHelpers::AddGifAction(std::move(callback), previewDocument);
-	} else if (const auto previewPhoto = item->getPreviewPhoto()) {
-		hideViaActions();
+		ChatHelpers::AddGifAction(
+			std::move(callback),
+			_controller,
+			previewDocument);
 	}
 
 	if (!_menu->empty()) {
@@ -661,7 +673,10 @@ void Inner::switchPm() {
 	if (_inlineBot && _inlineBot->isBot()) {
 		_inlineBot->botInfo->startToken = _switchPmStartToken;
 		_inlineBot->botInfo->inlineReturnTo = _currentDialogsEntryState;
-		Ui::showPeerHistory(_inlineBot, ShowAndStartBotMsgId);
+		_controller->showPeerHistory(
+			_inlineBot,
+			Window::SectionShow::Way::ClearStack,
+			ShowAndStartBotMsgId);
 	}
 }
 

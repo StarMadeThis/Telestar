@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/platform/base_platform_info.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/unixtime.h"
+#include "base/call_delayed.h"
 #include "mainwindow.h"
 #include "mainwidget.h"
 #include "core/application.h"
@@ -39,13 +40,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/image/image.h"
 #include "ui/text/text_utilities.h"
 #include "ui/inactive_press.h"
+#include "ui/painter.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "core/click_handler_types.h"
 #include "core/file_utilities.h"
 #include "lang/lang_keys.h"
 #include "boxes/peers/edit_participant_box.h"
 #include "boxes/peers/edit_participants_box.h"
-#include "ui/boxes/confirm_box.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
@@ -56,7 +57,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_cloud_file.h"
 #include "data/data_channel.h"
 #include "data/data_user.h"
-#include "facades.h"
 #include "styles/style_chat.h"
 #include "styles/style_menu_icons.h"
 
@@ -250,7 +250,8 @@ InnerWidget::InnerWidget(
 , _emptyText(
 		st::historyAdminLogEmptyWidth
 		- st::historyAdminLogEmptyPadding.left()
-		- st::historyAdminLogEmptyPadding.left()) {
+		- st::historyAdminLogEmptyPadding.left())
+, _antiSpamValidator(_controller, _channel) {
 	Window::ChatThemeValueFromPeer(
 		controller,
 		channel
@@ -301,23 +302,34 @@ InnerWidget::InnerWidget(
 			}
 		}
 	}, lifetime());
-	subscribe(session().data().queryItemVisibility(), [=](
+	session().data().itemVisibilityQueries(
+	) | rpl::filter([=](
 			const Data::Session::ItemVisibilityQuery &query) {
-		if (_history != query.item->history()
-			|| !query.item->isAdminLogEntry()
-			|| !isVisible()) {
-			return;
-		}
+		return (_history == query.item->history())
+			&& query.item->isAdminLogEntry()
+			&& isVisible();
+	}) | rpl::start_with_next([=](
+			const Data::Session::ItemVisibilityQuery &query) {
 		if (const auto view = viewForItem(query.item)) {
 			auto top = itemTop(view);
-			if (top >= 0 && top + view->height() > _visibleTop && top < _visibleBottom) {
+			if (top >= 0
+				&& top + view->height() > _visibleTop
+				&& top < _visibleBottom) {
 				*query.isVisible = true;
 			}
 		}
-	});
+	}, lifetime());
+
+	controller->adaptive().chatWideValue(
+	) | rpl::start_with_next([=](bool wide) {
+		_isChatWide = wide;
+	}, lifetime());
+
 	updateEmptyText();
 
-	requestAdmins();
+	_antiSpamValidator.resolveUser(crl::guard(
+		this,
+		[=] { requestAdmins(); }));
 }
 
 Main::Session &InnerWidget::session() const {
@@ -356,6 +368,7 @@ void InnerWidget::visibleTopBottomUpdated(
 		scrollDateHideByTimer();
 	}
 	_controller->floatPlayerAreaUpdated();
+	session().data().itemVisibilitiesUpdated();
 }
 
 void InnerWidget::updateVisibleTopItem() {
@@ -460,6 +473,9 @@ void InnerWidget::requestAdmins() {
 				data);
 			_admins.clear();
 			_adminsCanEdit.clear();
+			if (const auto user = _antiSpamValidator.maybeAppendUser()) {
+				_admins.emplace_back(user);
+			}
 			for (const auto &parsed : list) {
 				if (parsed.isUser()) {
 					const auto user = _channel->owner().userLoaded(
@@ -505,8 +521,6 @@ void InnerWidget::clearAndRequestLog() {
 }
 
 void InnerWidget::updateEmptyText() {
-	auto options = _defaultOptions;
-	options.flags |= TextParseMarkdown;
 	auto hasSearch = !_searchQuery.isEmpty();
 	auto hasFilter = (_filter.flags != 0) || !_filter.allUsers;
 	auto text = Ui::Text::Semibold((hasSearch || hasFilter)
@@ -522,16 +536,14 @@ void InnerWidget::updateEmptyText() {
 		: _channel->isMegagroup()
 		? tr::lng_admin_log_no_events_text(tr::now)
 		: tr::lng_admin_log_no_events_text_channel(tr::now);
-	text.text.append(qstr("\n\n") + description);
-	_emptyText.setMarkedText(st::defaultTextStyle, text, options);
+	text.text.append(u"\n\n"_q + description);
+	_emptyText.setMarkedText(st::defaultTextStyle, text);
 }
 
 QString InnerWidget::tooltipText() const {
 	if (_mouseCursorState == CursorState::Date
 		&& _mouseAction == MouseAction::None) {
 		if (const auto view = Element::Hovered()) {
-			const auto format = QLocale::system().dateTimeFormat(
-				QLocale::LongFormat);
 			auto dateText = HistoryView::DateTooltipText(view);
 
 			const auto sentIt = _itemDates.find(view->data());
@@ -539,7 +551,9 @@ QString InnerWidget::tooltipText() const {
 				dateText += '\n' + tr::lng_sent_date(
 					tr::now,
 					lt_date,
-					base::unixtime::parse(sentIt->second).toString(format));
+					QLocale().toString(
+						base::unixtime::parse(sentIt->second),
+						QLocale::LongFormat));
 			}
 			return dateText;
 		}
@@ -585,9 +599,9 @@ bool InnerWidget::elementUnderCursor(
 	return (Element::Hovered() == view);
 }
 
-crl::time InnerWidget::elementHighlightTime(
-		not_null<const HistoryItem*> item) {
-	return crl::time(0);
+float64 InnerWidget::elementHighlightOpacity(
+		not_null<const HistoryItem*> item) const {
+	return 0.;
 }
 
 bool InnerWidget::elementInSelectionMode() {
@@ -616,14 +630,14 @@ void InnerWidget::elementShowPollResults(
 void InnerWidget::elementOpenPhoto(
 		not_null<PhotoData*> photo,
 		FullMsgId context) {
-	_controller->openPhoto(photo, context);
+	_controller->openPhoto(photo, context, MsgId(0));
 }
 
 void InnerWidget::elementOpenDocument(
 		not_null<DocumentData*> document,
 		FullMsgId context,
 		bool showInMediaView) {
-	_controller->openDocument(document, context, showInMediaView);
+	_controller->openDocument(document, context, MsgId(0), showInMediaView);
 }
 
 void InnerWidget::elementCancelUpload(const FullMsgId &context) {
@@ -637,7 +651,7 @@ void InnerWidget::elementShowTooltip(
 	Fn<void()> hiddenCallback) {
 }
 
-bool InnerWidget::elementIsGifPaused() {
+bool InnerWidget::elementAnimationsPaused() {
 	return _controller->isGifPausedAtLeastFor(Window::GifPauseReason::Any);
 }
 
@@ -646,7 +660,7 @@ bool InnerWidget::elementHideReply(not_null<const Element*> view) {
 }
 
 bool InnerWidget::elementShownUnread(not_null<const Element*> view) {
-	return view->data()->unread();
+	return false;
 }
 
 void InnerWidget::elementSendBotCommand(
@@ -658,7 +672,7 @@ void InnerWidget::elementHandleViaClick(not_null<UserData*> bot) {
 }
 
 bool InnerWidget::elementIsChatWide() {
-	return _controller->adaptive().isChatWide();
+	return _isChatWide;
 }
 
 not_null<Ui::PathShiftGradient*> InnerWidget::elementPathShiftGradient() {
@@ -671,9 +685,16 @@ void InnerWidget::elementReplyTo(const FullMsgId &to) {
 void InnerWidget::elementStartInteraction(not_null<const Element*> view) {
 }
 
-void InnerWidget::elementShowSpoilerAnimation() {
-	_spoilerOpacity.stop();
-	_spoilerOpacity.start([=] { update(); }, 0., 1., st::fadeWrapDuration);
+void InnerWidget::elementStartPremium(
+	not_null<const Element*> view,
+	Element *replacing) {
+}
+
+void InnerWidget::elementCancelPremium(not_null<const Element*> view) {
+}
+
+QString InnerWidget::elementAuthorRank(not_null<const Element*> view) {
+	return {};
 }
 
 void InnerWidget::saveState(not_null<SectionMemento*> memento) {
@@ -742,7 +763,8 @@ void InnerWidget::preloadMore(Direction direction) {
 			| ((f & LocalFlag::Edit) ? Flag::f_edit : empty)
 			| ((f & LocalFlag::Delete) ? Flag::f_delete : empty)
 			| ((f & LocalFlag::GroupCall) ? Flag::f_group_call : empty)
-			| ((f & LocalFlag::Invites) ? Flag::f_invites : empty);
+			| ((f & LocalFlag::Invites) ? Flag::f_invites : empty)
+			| ((f & LocalFlag::Topics) ? Flag::f_forums : empty);
 	}();
 	if (_filter.flags != 0) {
 		flags |= MTPchannels_GetAdminLog::Flag::f_events_filter;
@@ -807,23 +829,32 @@ void InnerWidget::addEvents(Direction direction, const QVector<MTPChannelAdminLo
 		? _items
 		: newItemsForDownDirection;
 	addToItems.reserve(oldItemsCount + events.size() * 2);
+
+	const auto antiSpamUserId = _antiSpamValidator.userId();
 	for (const auto &event : events) {
-		const auto &data = event.match([](const MTPDchannelAdminLogEvent &d)
-				-> const MTPDchannelAdminLogEvent & {
-			return d;
-		});
+		const auto &data = event.data();
 		const auto id = data.vid().v;
 		if (_eventIds.find(id) != _eventIds.end()) {
 			return;
 		}
+		const auto rememberRealMsgId = (antiSpamUserId
+			== peerToUser(peerFromUser(data.vuser_id())));
 
 		auto count = 0;
-		const auto addOne = [&](OwnedItem item, TimeId sentDate) {
+		const auto addOne = [&](
+				OwnedItem item,
+				TimeId sentDate,
+				MsgId realId) {
 			if (sentDate) {
 				_itemDates.emplace(item->data(), sentDate);
 			}
 			_eventIds.emplace(id);
 			_itemsByData.emplace(item->data(), item.get());
+			if (rememberRealMsgId && realId) {
+				_antiSpamValidator.addEventMsgId(
+					item->data()->fullId(),
+					realId);
+			}
 			addToItems.push_back(std::move(item));
 			++count;
 		};
@@ -881,8 +912,8 @@ void InnerWidget::itemsAdded(Direction direction, int addedCount) {
 				const auto previous = _items[i].get();
 				view->setDisplayDate(view->dateTime().date() != previous->dateTime().date());
 				const auto attach = view->computeIsAttachToPrevious(previous);
-				view->setAttachToPrevious(attach);
-				previous->setAttachToNext(attach);
+				view->setAttachToPrevious(attach, previous);
+				previous->setAttachToNext(attach, view);
 			} else {
 				view->setDisplayDate(true);
 			}
@@ -925,7 +956,7 @@ void InnerWidget::restoreScrollPosition() {
 }
 
 void InnerWidget::paintEvent(QPaintEvent *e) {
-	if (Ui::skipPaintEvent(this, e)) {
+	if (_controller->contentOverlapped(this, e)) {
 		return;
 	}
 
@@ -1026,10 +1057,8 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 						p.setOpacity(opacity);
 						const auto dateY = /*noFloatingDate ? itemtop :*/ (dateTop - st::msgServiceMargin.top());
 						const auto width = view->width();
-						const auto chatWide =
-							_controller->adaptive().isChatWide();
 						if (const auto date = view->Get<HistoryView::DateBadge>()) {
-							date->paint(p, context.st, dateY, width, chatWide);
+							date->paint(p, context.st, dateY, width, _isChatWide);
 						} else {
 							HistoryView::ServiceMessagePainter::PaintDate(
 								p,
@@ -1037,7 +1066,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 								view->dateTime(),
 								dateY,
 								width,
-								chatWide);
+								_isChatWide);
 						}
 					}
 				}
@@ -1164,7 +1193,7 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		this,
-		st::popupMenuWithIcons);
+		st::popupMenuExpandedSeparator);
 
 	const auto link = ClickHandler::getActive();
 	auto view = Element::Hovered()
@@ -1193,7 +1222,7 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		if (lnkPhoto) {
 			const auto media = lnkPhoto->activeMediaView();
 			if (!lnkPhoto->isNull() && media && media->loaded()) {
-				_menu->addAction(tr::lng_context_save_image(tr::now), App::LambdaDelayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [=] {
+				_menu->addAction(tr::lng_context_save_image(tr::now), base::fn_delayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [=] {
 					savePhotoToFile(lnkPhoto);
 				}), &st::menuIconSaveImage);
 				_menu->addAction(tr::lng_context_copy_image(tr::now), [=] {
@@ -1239,7 +1268,7 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 						showContextInFolder(lnkDocument);
 					}, &st::menuIconShowInFolder);
 				}
-				_menu->addAction(lnkIsVideo ? tr::lng_context_save_video(tr::now) : (lnkIsVoice ?  tr::lng_context_save_audio(tr::now) : (lnkIsAudio ?  tr::lng_context_save_audio_file(tr::now) :  tr::lng_context_save_file(tr::now))), App::LambdaDelayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [this, lnkDocument] {
+				_menu->addAction(lnkIsVideo ? tr::lng_context_save_video(tr::now) : (lnkIsVoice ?  tr::lng_context_save_audio(tr::now) : (lnkIsAudio ?  tr::lng_context_save_audio_file(tr::now) :  tr::lng_context_save_file(tr::now))), base::fn_delayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [this, lnkDocument] {
 					saveDocumentToFile(lnkDocument);
 				}), &st::menuIconDownload);
 				if (lnkDocument->hasAttachedStickers()) {
@@ -1263,6 +1292,8 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		const auto item = view ? view->data().get() : nullptr;
 		const auto itemId = item ? item->fullId() : FullMsgId();
 
+		_antiSpamValidator.addAction(_menu, itemId);
+
 		auto msg = dynamic_cast<HistoryMessage*>(item);
 		if (isUponSelected > 0) {
 			_menu->addAction(
@@ -1275,7 +1306,7 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				const auto mediaHasTextForCopy = media && media->hasTextForCopy();
 				if (const auto document = media ? media->getDocument() : nullptr) {
 					if (document->sticker()) {
-						_menu->addAction(tr::lng_context_save_image(tr::now), App::LambdaDelayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [this, document] {
+						_menu->addAction(tr::lng_context_save_image(tr::now), base::fn_delayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [this, document] {
 							saveDocumentToFile(document);
 						}), &st::menuIconDownload);
 					}
@@ -1319,16 +1350,15 @@ void InnerWidget::savePhotoToFile(not_null<PhotoData*> photo) {
 		return;
 	}
 
-	const auto image = media->image(Data::PhotoSize::Large)->original();
-	auto filter = qsl("JPEG Image (*.jpg);;") + FileDialog::AllFilesFilter();
+	auto filter = u"JPEG Image (*.jpg);;"_q + FileDialog::AllFilesFilter();
 	FileDialog::GetWritePath(
 		this,
 		tr::lng_save_photo(tr::now),
 		filter,
-		filedialogDefaultName(qsl("photo"), qsl(".jpg")),
+		filedialogDefaultName(u"photo"_q, u".jpg"_q),
 		crl::guard(this, [=](const QString &result) {
 			if (!result.isEmpty()) {
-				image.save(result, "JPG");
+				media->saveToFile(result);
 			}
 		}));
 }
@@ -1373,7 +1403,7 @@ void InnerWidget::openContextGif(FullMsgId itemId) {
 	if (const auto item = session().data().message(itemId)) {
 		if (const auto media = item->media()) {
 			if (const auto document = media->document()) {
-				_controller->openDocument(document, itemId, true);
+				_controller->openDocument(document, itemId, MsgId(), true);
 			}
 		}
 	}
@@ -1399,10 +1429,8 @@ void InnerWidget::suggestRestrictParticipant(
 			return;
 		}
 	}
-
-	const auto user = participant->asUser();
-
-	_menu->addAction(user ? tr::lng_context_restrict_user(tr::now) : tr::lng_context_remove_from_group(tr::now), [=] {
+	_menu->addAction(tr::lng_context_restrict_user(tr::now), [=] {
+		const auto user = participant->asUser();
 		auto editRestrictions = [=](bool hasAdminRights, ChatRestrictionsInfo currentRights) {
 			auto weak = QPointer<InnerWidget>(this);
 			auto weakBox = std::make_shared<QPointer<Ui::BoxContent>>();
@@ -1425,7 +1453,7 @@ void InnerWidget::suggestRestrictParticipant(
 				: tr::lng_profile_sure_kick)(
 					tr::now,
 					lt_user,
-					participant->name);
+					participant->name());
 			auto weakBox = std::make_shared<QPointer<Ui::BoxContent>>();
 			const auto sure = crl::guard(this, [=] {
 				restrictParticipant(
@@ -1436,7 +1464,7 @@ void InnerWidget::suggestRestrictParticipant(
 					(*weakBox)->closeBox();
 				}
 			});
-			*weakBox = _controller->show(Box<Ui::ConfirmBox>(text, sure));
+			*weakBox = _controller->show(Ui::MakeConfirmBox({ text, sure }));
 		} else if (base::contains(_admins, user)) {
 			editRestrictions(true, ChatRestrictionsInfo());
 		} else {
@@ -1463,60 +1491,7 @@ void InnerWidget::suggestRestrictParticipant(
 				editRestrictions(false, ChatRestrictionsInfo());
 			}).send();
 		}
-	}, user ? &st::menuIconRestrict : &st::menuIconRemove);
-
-	if (user) {
-		_menu->addAction(tr::lng_context_remove_from_group(tr::now), [=] {
-			auto editRestrictions = [=](bool hasAdminRights, ChatRestrictionsInfo currentRights) {
-				const auto text = tr::lng_profile_sure_kick(tr::now, lt_user, user->firstName);
-				auto weak = QPointer<InnerWidget>(this);
-				auto weakBox = std::make_shared<QPointer<Ui::ConfirmBox>>();
-				auto box = Box<Ui::ConfirmBox>(
-					text,
-					tr::lng_box_remove(tr::now),
-					crl::guard(this, [=] {
-						if (weak) {
-							weak->restrictParticipant(
-								participant,
-								ChatRestrictionsInfo(),
-								ChannelData::KickedRestrictedRights(participant));
-						}
-						if (*weakBox) {
-							(*weakBox)->closeBox();
-						}
-					}));
-				*weakBox = Ui::show(
-					std::move(box),
-					Ui::LayerOption::KeepOther);
-			};
-			if (base::contains(_admins, user)) {
-				editRestrictions(true, ChatRestrictionsInfo());
-			} else {
-				_api.request(MTPchannels_GetParticipant(
-					_channel->inputChannel,
-					user->input
-				)).done([=](const MTPchannels_ChannelParticipant &result) {
-					Expects(result.type() == mtpc_channels_channelParticipant);
-
-					auto &participant = result.c_channels_channelParticipant();
-					_channel->owner().processUsers(participant.vusers());
-					auto type = participant.vparticipant().type();
-					if (type == mtpc_channelParticipantBanned) {
-						auto &banned = participant.vparticipant().c_channelParticipantBanned();
-						editRestrictions(false, ChatRestrictionsInfo(banned.vbanned_rights()));
-					} else {
-						auto hasAdminRights = (type == mtpc_channelParticipantAdmin)
-							|| (type == mtpc_channelParticipantCreator);
-						auto bannedRights = ChatRestrictionsInfo();
-						editRestrictions(hasAdminRights, bannedRights);
-					}
-				}).fail([=](const MTP::Error &error) {
-					auto bannedRights = ChatRestrictionsInfo();
-					editRestrictions(false, bannedRights);
-				}).send();
-			}
-		}, &st::menuIconRemove);
-	}
+	}, &st::menuIconRestrict);
 }
 
 void InnerWidget::restrictParticipant(
@@ -1708,7 +1683,7 @@ void InnerWidget::mouseActionFinish(const QPoint &screenPos, Qt::MouseButton but
 						? (ElementDelegate*)weak
 						: nullptr;
 				},
-				.sessionWindow = base::make_weak(_controller.get()),
+				.sessionWindow = base::make_weak(_controller),
 			})
 		});
 		return;
@@ -1930,7 +1905,7 @@ void InnerWidget::performDrag() {
 	//		auto selectedState = getSelectionState();
 	//		if (selectedState.count > 0 && selectedState.count == selectedState.canForwardCount) {
 	//			session().data().setMimeForwardIds(getSelectedItems());
-	//			mimeData->setData(qsl("application/x-td-forward"), "1");
+	//			mimeData->setData(u"application/x-td-forward"_q, "1");
 	//		}
 	//	}
 	//	_controller->window()->launchDrag(std::move(mimeData));
@@ -1942,7 +1917,7 @@ void InnerWidget::performDrag() {
 	//		pressedMedia = pressedItem->media();
 	//		if (_mouseCursorState == CursorState::Date
 	//			|| (pressedMedia && pressedMedia->dragItem())) {
-	//			forwardMimeType = qsl("application/x-td-forward");
+	//			forwardMimeType = u"application/x-td-forward"_q;
 	//			session().data().setMimeForwardIds(
 	//				session().data().itemOrItsGroup(pressedItem->data()));
 	//		}
@@ -1951,7 +1926,7 @@ void InnerWidget::performDrag() {
 	//		if ((pressedMedia = pressedLnkItem->media())) {
 	//			if (forwardMimeType.isEmpty()
 	//				&& pressedMedia->dragItemByHandler(pressedHandler)) {
-	//				forwardMimeType = qsl("application/x-td-forward");
+	//				forwardMimeType = u"application/x-td-forward"_q;
 	//				session().data().setMimeForwardIds(
 	//					{ 1, pressedLnkItem->fullId() });
 	//			}

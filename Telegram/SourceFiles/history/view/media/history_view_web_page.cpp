@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_web_page.h"
 
-#include "kotato/kotato_settings.h"
 #include "core/click_handler_types.h"
 #include "core/ui_integration.h"
 #include "lang/lang_keys.h"
@@ -25,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "ui/chat/chat_style.h"
 #include "ui/cached_round_corners.h"
+#include "ui/painter.h"
 #include "data/data_session.h"
 #include "data/data_wall_paper.h"
 #include "data/data_media_types.h"
@@ -61,9 +61,11 @@ std::vector<std::unique_ptr<Data::Media>> PrepareCollageMedia(
 	result.reserve(data.items.size());
 	for (const auto &item : data.items) {
 		if (const auto document = std::get_if<DocumentData*>(&item)) {
+			const auto skipPremiumEffect = false;
 			result.push_back(std::make_unique<Data::MediaFile>(
 				parent,
-				*document));
+				*document,
+				skipPremiumEffect));
 		} else if (const auto photo = std::get_if<PhotoData*>(&item)) {
 			result.push_back(std::make_unique<Data::MediaPhoto>(
 				parent,
@@ -105,7 +107,7 @@ QSize WebPage::countOptimalSize() {
 		_title = Ui::Text::String(st::msgMinWidth - st::webPageLeft);
 		_description = Ui::Text::String(st::msgMinWidth - st::webPageLeft);
 	}
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 
 	if (!_openl && !_data->url.isEmpty()) {
 		const auto previewOfHiddenUrl = [&] {
@@ -114,7 +116,7 @@ QSize WebPage::countOptimalSize() {
 				if (result.endsWith('/')) {
 					result.chop(1);
 				}
-				const auto prefixes = { qstr("http://"), qstr("https://") };
+				const auto prefixes = { u"http://"_q, u"https://"_q };
 				for (const auto &prefix : prefixes) {
 					if (result.startsWith(prefix)) {
 						result = result.mid(prefix.size());
@@ -164,8 +166,8 @@ QSize WebPage::countOptimalSize() {
 		&& _data->type != WebPageType::Video) {
 		if (_data->type == WebPageType::Profile) {
 			_asArticle = true;
-		} else if (_data->siteName == qstr("Twitter")
-			|| _data->siteName == qstr("Facebook")
+		} else if (_data->siteName == u"Twitter"_q
+			|| _data->siteName == u"Facebook"_q
 			|| _data->type == WebPageType::ArticleWithIV) {
 			_asArticle = false;
 		} else {
@@ -209,11 +211,14 @@ QSize WebPage::countOptimalSize() {
 				- st::msgPadding.right()
 				- st::webPageLeft);
 		}
-		auto context = Core::MarkedTextContext();
 		using MarkedTextContext = Core::MarkedTextContext;
-		if (_data->siteName == qstr("Twitter")) {
+		auto context = MarkedTextContext{
+			.session = &history()->session(),
+			.customEmojiRepaint = [=] { _parent->customEmojiRepaint(); },
+		};
+		if (_data->siteName == u"Twitter"_q) {
 			context.type = MarkedTextContext::HashtagMentionType::Twitter;
-		} else if (_data->siteName == qstr("Instagram")) {
+		} else if (_data->siteName == u"Instagram"_q) {
 			context.type = MarkedTextContext::HashtagMentionType::Instagram;
 		}
 		_description.setMarkedText(
@@ -236,11 +241,6 @@ QSize WebPage::countOptimalSize() {
 	}
 	if (_title.isEmpty() && !title.isEmpty()) {
 		auto titleWithEntities = Ui::Text::Link(title, _data->url);
-		if (textFloatsAroundInfo && _description.isEmpty()) {
-			_title.updateSkipBlock(
-				_parent->skipBlockWidth(),
-				_parent->skipBlockHeight());
-		}
 		if (!_siteNameLines && !_data->url.isEmpty()) {
 			_title.setMarkedText(
 				st::webPageTitleStyle,
@@ -252,6 +252,11 @@ QSize WebPage::countOptimalSize() {
 				st::webPageTitleStyle,
 				title,
 				Ui::WebpageTextTitleOptions());
+		}
+		if (textFloatsAroundInfo && _description.isEmpty()) {
+			_title.updateSkipBlock(
+				_parent->skipBlockWidth(),
+				_parent->skipBlockHeight());
 		}
 	}
 
@@ -307,10 +312,6 @@ QSize WebPage::countOptimalSize() {
 		_durationWidth = st::msgDateFont->width(_duration);
 	}
 	maxWidth += st::msgPadding.left() + st::webPageLeft + st::msgPadding.right();
-	if (::Kotato::JsonSettings::GetBool("adaptive_bubbles")) {
-		accumulate_min(maxWidth, st::msgMaxWidth);
-		accumulate_max(maxWidth, _parent->plainMaxWidth());
-	}
 	auto padding = inBubblePadding();
 	minHeight += padding.top() + padding.bottom();
 
@@ -325,14 +326,10 @@ QSize WebPage::countCurrentSize(int newWidth) {
 		return { newWidth, minHeight() };
 	}
 
-	if (::Kotato::JsonSettings::GetBool("adaptive_bubbles") && !asArticle()) {
-		accumulate_min(newWidth, maxWidth());
-	}
-
 	auto innerWidth = newWidth - st::msgPadding.left() - st::webPageLeft - st::msgPadding.right();
 	auto newHeight = 0;
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 	auto linesMax = isLogEntryOriginal() ? kMaxOriginalEntryLines : 5;
 	auto siteNameHeight = _siteNameLines ? lineHeight : 0;
 	if (asArticle()) {
@@ -468,6 +465,7 @@ void WebPage::unloadHeavyPart() {
 	if (_attach) {
 		_attach->unloadHeavyPart();
 	}
+	_description.unloadPersistentAnimation();
 	_photoMedia = nullptr;
 }
 
@@ -501,7 +499,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 	QRect bar(style::rtlrect(st::msgPadding.left(), tshift, st::webPageBar, height() - tshift - bshift, width()));
 	p.fillRect(bar, barfg);
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 	if (asArticle()) {
 		ensurePhotoMediaCreated();
 
@@ -538,7 +536,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 				p,
 				style::rtlrect(padding.left() + paintw - pw, tshift, pw, _pixh, width()),
 				st->msgSelectOverlay(),
-				st->msgSelectOverlayCornersSmall());
+				st->msgSelectOverlayCorners(Ui::CachedCornerRadius::Small));
 		}
 		paintw -= pw + st::webPagePhotoDelta;
 	}
@@ -569,13 +567,21 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 		if (_description.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
-		if (_descriptionLines > 0) {
-			_description.drawLeftElided(p, padding.left(), tshift, paintw, width(), _descriptionLines, style::al_left, 0, -1, endskip, false, toDescriptionSelection(context.selection));
-			tshift += _descriptionLines * lineHeight;
-		} else {
-			_description.drawLeft(p, padding.left(), tshift, paintw, width(), style::al_left, 0, -1, toDescriptionSelection(context.selection));
-			tshift += _description.countHeight(paintw);
-		}
+		_parent->prepareCustomEmojiPaint(p, context, _description);
+		_description.draw(p, {
+			.position = { padding.left(), tshift },
+			.outerWidth = width(),
+			.availableWidth = paintw,
+			.spoiler = Ui::Text::DefaultSpoilerCache(),
+			.now = context.now,
+			.paused = context.paused,
+			.selection = toDescriptionSelection(context.selection),
+			.elisionLines = std::max(_descriptionLines, 0),
+			.elisionRemoveFromEnd = (_descriptionLines > 0) ? endskip : 0,
+		});
+		tshift += (_descriptionLines > 0)
+			? (_descriptionLines * lineHeight)
+			: _description.countHeight(paintw);
 	}
 	if (_attach) {
 		auto attachAtTop = !_siteNameLines && !_titleLines && !_descriptionLines;
@@ -601,7 +607,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			&& _data->photo
 			&& !_data->document) {
 			if (_attach->isReadyForOpen()) {
-				if (_data->siteName == qstr("YouTube")) {
+				if (_data->siteName == u"YouTube"_q) {
 					st->youtubeIcon().paint(p, (pixwidth - st::youtubeIcon.width()) / 2, (pixheight - st::youtubeIcon.height()) / 2, width());
 				} else {
 					st->videoIcon().paint(p, (pixwidth - st::videoIcon.width()) / 2, (pixheight - st::videoIcon.height()) / 2, width());
@@ -652,7 +658,7 @@ TextState WebPage::textState(QPoint point, StateRequest request) const {
 	}
 	paintw -= padding.left() + padding.right();
 
-	auto lineHeight = unitedLineHeight();
+	auto lineHeight = UnitedLineHeight();
 	auto inThumb = false;
 	if (asArticle()) {
 		auto pw = qMax(_pixw, lineHeight);
@@ -746,8 +752,8 @@ ClickHandlerPtr WebPage::replaceAttachLink(
 			|| _data->type == WebPageType::Video) {
 			return _openl;
 		} else if (_data->type == WebPageType::Photo
-			|| _data->siteName == qstr("Twitter")
-			|| _data->siteName == qstr("Facebook")) {
+			|| _data->siteName == u"Twitter"_q
+			|| _data->siteName == u"Facebook"_q) {
 			// leave photo link
 		} else {
 			return _openl;

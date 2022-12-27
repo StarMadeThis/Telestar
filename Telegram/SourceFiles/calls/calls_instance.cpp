@@ -7,13 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_instance.h"
 
-#include "kotato/kotato_lang.h"
 #include "calls/calls_call.h"
 #include "calls/group/calls_group_common.h"
 #include "calls/group/calls_choose_join_as.h"
 #include "calls/group/calls_group_call.h"
+#include "calls/group/calls_group_rtmp.h"
 #include "mtproto/mtproto_dh_utils.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
 #include "apiwrap.h"
@@ -33,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "base/unixtime.h"
 #include "mtproto/mtproto_config.h"
+#include "boxes/abstract_box.h" // Ui::show().
 
 #include <tgcalls/VideoCaptureInterface.h>
 #include <tgcalls/StaticThreads.h>
@@ -171,7 +173,8 @@ FnMut<void()> Instance::Delegate::groupCallAddAsyncWaiter() {
 Instance::Instance()
 : _delegate(std::make_unique<Delegate>(this))
 , _cachedDhConfig(std::make_unique<DhConfig>())
-, _chooseJoinAs(std::make_unique<Group::ChooseJoinAsProcess>()) {
+, _chooseJoinAs(std::make_unique<Group::ChooseJoinAsProcess>())
+, _startWithRtmp(std::make_unique<Group::StartRtmpProcess>()) {
 }
 
 Instance::~Instance() {
@@ -190,8 +193,10 @@ void Instance::startOutgoingCall(not_null<UserData*> user, bool video) {
 	if (user->callsStatus() == UserData::CallsStatus::Private) {
 		// Request full user once more to refresh the setting in case it was changed.
 		user->session().api().requestFullPeer(user);
-		Ui::show(Box<Ui::InformBox>(
-			tr::lng_call_error_not_available(tr::now, lt_user, user->name)));
+		Ui::show(Ui::MakeInformBox(tr::lng_call_error_not_available(
+			tr::now,
+			lt_user,
+			user->name())));
 		return;
 	}
 	requestPermissionsOrFail(crl::guard(this, [=] {
@@ -200,24 +205,89 @@ void Instance::startOutgoingCall(not_null<UserData*> user, bool video) {
 }
 
 void Instance::startOrJoinGroupCall(
+		std::shared_ptr<Ui::Show> show,
 		not_null<PeerData*> peer,
-		const QString &joinHash,
-		bool confirmNeeded) {
-	const auto context = confirmNeeded
-		? Group::ChooseJoinAsProcess::Context::JoinWithConfirm
-		: peer->groupCall()
-		? Group::ChooseJoinAsProcess::Context::Join
-		: Group::ChooseJoinAsProcess::Context::Create;
-	_chooseJoinAs->start(peer, context, [=](object_ptr<Ui::BoxContent> box) {
-		Ui::show(std::move(box), Ui::LayerOption::KeepOther);
-	}, [=](QString text) {
-		Ui::Toast::Show(text);
-	}, [=](Group::JoinInfo info) {
-		const auto call = info.peer->groupCall();
-		info.joinHash = joinHash;
-		createGroupCall(
-			std::move(info),
-			call ? call->input() : MTP_inputGroupCall(MTPlong(), MTPlong()));
+		StartGroupCallArgs args) {
+	confirmLeaveCurrent(show, peer, args, [=](StartGroupCallArgs args) {
+		using JoinConfirm = Calls::StartGroupCallArgs::JoinConfirm;
+		const auto context = (args.confirm == JoinConfirm::Always)
+			? Group::ChooseJoinAsProcess::Context::JoinWithConfirm
+			: peer->groupCall()
+			? Group::ChooseJoinAsProcess::Context::Join
+			: args.scheduleNeeded
+			? Group::ChooseJoinAsProcess::Context::CreateScheduled
+			: Group::ChooseJoinAsProcess::Context::Create;
+		_chooseJoinAs->start(peer, context, show, [=](Group::JoinInfo info) {
+			const auto call = info.peer->groupCall();
+			info.joinHash = args.joinHash;
+			if (call) {
+				info.rtmp = call->rtmp();
+			}
+			createGroupCall(
+				std::move(info),
+				call ? call->input() : MTP_inputGroupCall({}, {}));
+		});
+	});
+}
+
+void Instance::confirmLeaveCurrent(
+		std::shared_ptr<Ui::Show> show,
+		not_null<PeerData*> peer,
+		StartGroupCallArgs args,
+		Fn<void(StartGroupCallArgs)> confirmed) {
+	using JoinConfirm = Calls::StartGroupCallArgs::JoinConfirm;
+
+	auto confirmedArgs = args;
+	confirmedArgs.confirm = JoinConfirm::None;
+
+	const auto askConfirmation = [&](QString text, QString button) {
+		show->showBox(Ui::MakeConfirmBox({
+			.text = text,
+			.confirmed = [=] {
+				show->hideLayer();
+				confirmed(confirmedArgs);
+			},
+			.confirmText = button,
+		}));
+	};
+	if (args.confirm != JoinConfirm::None && inCall()) {
+		// Do you want to leave your active voice chat
+		// to join a voice chat in this group?
+		askConfirmation(
+			(peer->isBroadcast()
+				? tr::lng_call_leave_to_other_sure_channel
+				: tr::lng_call_leave_to_other_sure)(tr::now),
+			tr::lng_call_bar_hangup(tr::now));
+	} else if (args.confirm != JoinConfirm::None && inGroupCall()) {
+		const auto now = currentGroupCall()->peer();
+		if (now == peer) {
+			activateCurrentCall(args.joinHash);
+		} else if (currentGroupCall()->scheduleDate()) {
+			confirmed(confirmedArgs);
+		} else {
+			askConfirmation(
+				((peer->isBroadcast() && now->isBroadcast())
+					? tr::lng_group_call_leave_channel_to_other_sure_channel
+					: now->isBroadcast()
+					? tr::lng_group_call_leave_channel_to_other_sure
+					: peer->isBroadcast()
+					? tr::lng_group_call_leave_to_other_sure_channel
+					: tr::lng_group_call_leave_to_other_sure)(tr::now),
+				tr::lng_group_call_leave(tr::now));
+		}
+	} else {
+		confirmed(args);
+	}
+}
+
+void Instance::showStartWithRtmp(
+		std::shared_ptr<Ui::Show> show,
+		not_null<PeerData*> peer) {
+	_startWithRtmp->start(peer, show, [=](Group::JoinInfo info) {
+		confirmLeaveCurrent(show, peer, {}, [=](auto) {
+			_startWithRtmp->close();
+			createGroupCall(std::move(info), MTP_inputGroupCall({}, {}));
+		});
 	});
 }
 
@@ -696,13 +766,14 @@ void Instance::requestPermissionOrFail(Platform::PermissionType type, Fn<void()>
 		if (inGroupCall()) {
 			_currentGroupCall->hangup();
 		}
-		Ui::show(Box<Ui::ConfirmBox>(
-			ktr("ktg_no_mic_permission"),
-			tr::lng_menu_settings(tr::now),
-			crl::guard(this, [=] {
+		Ui::show(Ui::MakeConfirmBox({
+			.text = tr::lng_no_mic_permission(),
+			.confirmed = crl::guard(this, [=](Fn<void()> &&close) {
 				Platform::OpenSystemSettingsForPermission(type);
-				Ui::hideLayer();
-			})));
+				close();
+			}),
+			.confirmText = tr::lng_menu_settings(),
+		}));
 	}
 }
 

@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class Image;
 class History;
 class HistoryItem;
+class HistoryMessage;
 
 namespace base {
 template <typename Enum>
@@ -58,12 +59,29 @@ struct Call {
 	bool video = false;
 };
 
+struct ExtendedPreview {
+	QByteArray inlineThumbnailBytes;
+	QSize dimensions;
+	TimeId videoDuration = -1;
+
+	[[nodiscard]] bool empty() const {
+		return dimensions.isEmpty();
+	}
+	explicit operator bool() const {
+		return !empty();
+	}
+};
+
+class Media;
+
 struct Invoice {
 	MsgId receiptMsgId = 0;
 	uint64 amount = 0;
 	QString currency;
 	QString title;
-	QString description;
+	TextWithEntities description;
+	ExtendedPreview extendedPreview;
+	std::unique_ptr<Media> extendedMedia;
 	PhotoData *photo = nullptr;
 	bool isTest = false;
 };
@@ -90,7 +108,6 @@ public:
 	virtual const Invoice *invoice() const;
 	virtual Data::CloudImage *location() const;
 	virtual PollData *poll() const;
-	virtual const LocationPoint *geoPoint() const;
 
 	virtual bool uploading() const;
 	virtual Storage::SharedMediaTypesMask sharedMediaTypes() const;
@@ -112,7 +129,7 @@ public:
 	virtual bool forwardedBecomesUnread() const;
 	virtual bool dropForwardedInfo() const;
 	virtual bool forceForwardedInfo() const;
-	virtual QString errorTextForForward(not_null<PeerData*> peer, bool unquoted = false) const;
+	virtual QString errorTextForForward(not_null<PeerData*> peer) const;
 
 	[[nodiscard]] virtual bool consumeMessageText(
 		const TextWithEntities &text);
@@ -122,6 +139,11 @@ public:
 	// the media (all media that was generated on client side, for example).
 	virtual bool updateInlineResultMedia(const MTPMessageMedia &media) = 0;
 	virtual bool updateSentMedia(const MTPMessageMedia &media) = 0;
+	virtual bool updateExtendedMedia(
+			not_null<HistoryMessage*> item,
+			const MTPMessageExtendedMedia &media) {
+		return false;
+	}
 	virtual std::unique_ptr<HistoryView::Media> createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
@@ -167,7 +189,7 @@ public:
 	TextForMimeData clipboardText() const override;
 	bool allowsEditCaption() const override;
 	bool allowsEditMedia() const override;
-	QString errorTextForForward(not_null<PeerData*> peer, bool unquoted = false) const override;
+	QString errorTextForForward(not_null<PeerData*> peer) const override;
 
 	bool updateInlineResultMedia(const MTPMessageMedia &media) override;
 	bool updateSentMedia(const MTPMessageMedia &media) override;
@@ -186,7 +208,8 @@ class MediaFile final : public Media {
 public:
 	MediaFile(
 		not_null<HistoryItem*> parent,
-		not_null<DocumentData*> document);
+		not_null<DocumentData*> document,
+		bool skipPremiumEffect);
 	~MediaFile();
 
 	std::unique_ptr<Media> clone(not_null<HistoryItem*> parent) override;
@@ -207,7 +230,7 @@ public:
 	bool allowsEditMedia() const override;
 	bool forwardedBecomesUnread() const override;
 	bool dropForwardedInfo() const override;
-	QString errorTextForForward(not_null<PeerData*> peer, bool unquoted = false) const override;
+	QString errorTextForForward(not_null<PeerData*> peer) const override;
 
 	bool updateInlineResultMedia(const MTPMessageMedia &media) override;
 	bool updateSentMedia(const MTPMessageMedia &media) override;
@@ -219,6 +242,7 @@ public:
 private:
 	not_null<DocumentData*> _document;
 	QString _emoji;
+	bool _skipPremiumEffect = false;
 
 };
 
@@ -265,7 +289,6 @@ public:
 	std::unique_ptr<Media> clone(not_null<HistoryItem*> parent) override;
 
 	Data::CloudImage *location() const override;
-	const LocationPoint *geoPoint() const override;
 	ItemPreview toPreview(ToPreviewOptions options) const override;
 	TextWithEntities notificationText() const override;
 	QString pinnedTextSubstring() const override;
@@ -366,7 +389,7 @@ public:
 	TextWithEntities notificationText() const override;
 	QString pinnedTextSubstring() const override;
 	TextForMimeData clipboardText() const override;
-	QString errorTextForForward(not_null<PeerData*> peer, bool unquoted = false) const override;
+	QString errorTextForForward(not_null<PeerData*> peer) const override;
 	bool dropForwardedInfo() const override;
 
 	bool consumeMessageText(const TextWithEntities &text) override;
@@ -404,6 +427,9 @@ public:
 
 	bool updateInlineResultMedia(const MTPMessageMedia &media) override;
 	bool updateSentMedia(const MTPMessageMedia &media) override;
+	bool updateExtendedMedia(
+		not_null<HistoryMessage*> item,
+		const MTPMessageExtendedMedia &media) override;
 	std::unique_ptr<HistoryView::Media> createView(
 		not_null<HistoryView::Element*> message,
 		not_null<HistoryItem*> realParent,
@@ -428,7 +454,7 @@ public:
 	TextWithEntities notificationText() const override;
 	QString pinnedTextSubstring() const override;
 	TextForMimeData clipboardText() const override;
-	QString errorTextForForward(not_null<PeerData*> peer, bool unquoted = false) const override;
+	QString errorTextForForward(not_null<PeerData*> peer) const override;
 
 	bool updateInlineResultMedia(const MTPMessageMedia &media) override;
 	bool updateSentMedia(const MTPMessageMedia &media) override;
@@ -475,12 +501,47 @@ private:
 
 };
 
+class MediaGiftBox final : public Media {
+public:
+	MediaGiftBox(
+		not_null<HistoryItem*> parent,
+		not_null<PeerData*> from,
+		int months);
+
+	std::unique_ptr<Media> clone(not_null<HistoryItem*> parent) override;
+
+	[[nodiscard]] not_null<PeerData*> from() const;
+	[[nodiscard]] int months() const;
+
+	[[nodiscard]] bool activated() const;
+	void setActivated(bool activated);
+
+	bool allowsRevoke(TimeId now) const override;
+	TextWithEntities notificationText() const override;
+	QString pinnedTextSubstring() const override;
+	TextForMimeData clipboardText() const override;
+	bool forceForwardedInfo() const override;
+
+	bool updateInlineResultMedia(const MTPMessageMedia &media) override;
+	bool updateSentMedia(const MTPMessageMedia &media) override;
+	std::unique_ptr<HistoryView::Media> createView(
+		not_null<HistoryView::Element*> message,
+		not_null<HistoryItem*> realParent,
+		HistoryView::Element *replacing = nullptr) override;
+
+private:
+	not_null<PeerData*> _from;
+	int _months = 0;
+	bool _activated = false;
+
+};
+
 [[nodiscard]] TextForMimeData WithCaptionClipboardText(
 	const QString &attachType,
 	TextForMimeData &&caption);
 
 [[nodiscard]] Invoice ComputeInvoiceData(
-	not_null<HistoryItem*> item,
+	not_null<HistoryMessage*> item,
 	const MTPDmessageMediaInvoice &data);
 
 [[nodiscard]] Call ComputeCallData(const MTPDmessageActionPhoneCall &call);

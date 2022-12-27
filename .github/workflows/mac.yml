@@ -5,8 +5,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-mac.md'
-      - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -24,8 +22,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '!docs/building-mac.md'
-      - 'kotatogram_changes.txt'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -44,12 +40,7 @@ jobs:
 
   macos:
     name: MacOS
-    if: >
-      !(github.event_name == 'push'
-        && contains(github.event.head_commit.message, '[skip ci]'))
-      && !(github.event_name == 'pull_request'
-        && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name) 
-    runs-on: macos-latest
+    runs-on: macos-12
 
     strategy:
       matrix:
@@ -58,13 +49,14 @@ jobs:
     env:
       UPLOAD_ARTIFACT: "false"
       ONLY_CACHE: "false"
+      PREPARE_PATH: "Telegram/build/prepare/prepare.py"
 
     steps:
       - name: Get repository name.
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Clone.
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3.1.0
         with:
           submodules: recursive
           path: ${{ env.REPO_NAME }}
@@ -72,8 +64,7 @@ jobs:
       - name: First set up.
         run: |
           sudo chown -R `whoami`:admin /usr/local/share
-          brew install automake fdk-aac lame libass libtool libvorbis libvpx \
-          ninja opus sdl shtool texi2html theora x264 xvid yasm pkg-config
+          brew install automake
 
           # Disable spotlight.
           sudo mdutil -a -i off
@@ -82,17 +73,19 @@ jobs:
 
       - name: ThirdParty cache.
         id: cache-third-party
-        uses: actions/cache@v2
+        uses: actions/cache@v3.0.11
         with:
           path: ThirdParty
-          key: ${{ runner.OS }}-third-party
+          key: ${{ runner.OS }}-third-party-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
+          restore-keys: ${{ runner.OS }}-third-party-
 
       - name: Libraries cache.
         id: cache-libs
-        uses: actions/cache@v2
+        uses: actions/cache@v3.0.11
         with:
           path: Libraries
-          key: ${{ runner.OS }}-libs
+          key: ${{ runner.OS }}-libs-${{ hashFiles(format('{0}/{1}', env.REPO_NAME, env.PREPARE_PATH)) }}
+          restore-keys: ${{ runner.OS }}-libs-
 
       - name: Libraries.
         run: |
@@ -103,7 +96,7 @@ jobs:
           cd Libraries
           find . -iname "*.dir" -exec rm -rf {} || true \;
 
-      - name: Kotatogram Desktop build.
+      - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
           cd $REPO_NAME/Telegram
@@ -112,22 +105,21 @@ jobs:
           if [ -n "${{ matrix.defines }}" ]; then
             DEFINE="-D ${{ matrix.defines }}=ON"
             echo Define from matrix: $DEFINE
-            echo "ARTIFACT_NAME=Kotatogram_${{ matrix.defines }}" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegram_${{ matrix.defines }}" >> $GITHUB_ENV
           else
-            echo "ARTIFACT_NAME=Kotatogram" >> $GITHUB_ENV
+            echo "ARTIFACT_NAME=Telegram" >> $GITHUB_ENV
           fi
 
           ./configure.sh \
           -D CMAKE_C_FLAGS="-Werror" \
           -D CMAKE_CXX_FLAGS="-Werror" \
           -D TDESKTOP_API_TEST=ON \
-          -D DESKTOP_APP_USE_PACKAGED=OFF \
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF \
           $DEFINE
 
           cd ../out
 
-          xcoderun='xcodebuild build -project Telegram.xcodeproj -scheme Telegram -destination "platform=macOS,arch=x86_64" -configuration Debug'
+          xcoderun='xcodebuild build -project Telegram.xcodeproj -scheme Telegram -destination "platform=macOS,arch=x86_64" -configuration Debug CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO'
           bash -c "$xcoderun" || bash -c "$xcoderun" || bash -c "$xcoderun"
 
       - name: Move artifact.
@@ -135,7 +127,7 @@ jobs:
         run: |
           cd $REPO_NAME/out/Debug
           mkdir artifact
-          mv Kotatogram.app artifact/
+          mv Telegram.app artifact/
           mv Updater artifact/
       - uses: actions/upload-artifact@master
         if: env.UPLOAD_ARTIFACT == 'true'

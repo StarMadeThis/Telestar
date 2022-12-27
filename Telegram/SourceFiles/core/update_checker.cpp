@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/update_checker.h"
 
-#include "kotato/kotato_version.h"
 #include "platform/platform_specific.h"
 #include "base/platform/base_platform_info.h"
 #include "base/platform/base_platform_file_utilities.h"
@@ -24,13 +23,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "info/info_memento.h"
-#include "info/settings/info_settings_widget.h"
+#include "info/info_controller.h"
+#include "window/window_controller.h"
 #include "window/window_session_controller.h"
+#include "settings/settings_advanced.h"
 #include "settings/settings_intro.h"
 #include "ui/layers/box_content.h"
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+
+#include <ksandbox.h>
 
 extern "C" {
 #include <openssl/rsa.h>
@@ -225,7 +228,7 @@ std::shared_ptr<Updater> GetUpdaterInstance() {
 }
 
 QString UpdatesFolder() {
-	return cWorkingDir() + qsl("tupdates");
+	return cWorkingDir() + u"tupdates"_q;
 }
 
 void ClearAll() {
@@ -256,10 +259,10 @@ QString FindUpdateFile() {
 }
 
 QString ExtractFilename(const QString &url) {
-	const auto expression = QRegularExpression(qsl("/([^/\\?]+)(\\?|$)"));
+	const auto expression = QRegularExpression(u"/([^/\\?]+)(\\?|$)"_q);
 	if (const auto match = expression.match(url); match.hasMatch()) {
 		return match.captured(1).replace(
-			QRegularExpression(qsl("[^a-zA-Z0-9_\\-]")),
+			QRegularExpression(u"[^a-zA-Z0-9_\\-]"_q),
 			QString());
 	}
 	return QString();
@@ -287,7 +290,7 @@ bool UnpackUpdate(const QString &filepath) {
 	}
 	input.close();
 
-	QString tempDirPath = cWorkingDir() + qsl("tupdates/temp"), readyFilePath = cWorkingDir() + qsl("tupdates/temp/ready");
+	QString tempDirPath = cWorkingDir() + u"tupdates/temp"_q, readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q;
 	base::Platform::DeleteDirectory(tempDirPath);
 
 	QDir tempDir(tempDirPath);
@@ -306,7 +309,7 @@ bool UnpackUpdate(const QString &filepath) {
 	RSA *pbKey = [] {
 		const auto bio = MakeBIO(
 			const_cast<char*>(
-				AppKotatoBetaVersion
+				AppBetaVersion
 					? UpdatesPublicBetaKey
 					: UpdatesPublicKey),
 			-1);
@@ -323,7 +326,7 @@ bool UnpackUpdate(const QString &filepath) {
 		pbKey = [] {
 			const auto bio = MakeBIO(
 				const_cast<char*>(
-					AppKotatoBetaVersion
+					AppBetaVersion
 						? UpdatesPublicKey
 						: UpdatesPublicBetaKey),
 				-1);
@@ -424,8 +427,8 @@ bool UnpackUpdate(const QString &filepath) {
 				LOG(("Update Error: downloaded alpha version %1 is not greater, than mine %2").arg(alphaVersion).arg(cAlphaVersion()));
 				return false;
 			}
-		} else if (int32(version) <= AppKotatoVersion) {
-			LOG(("Update Error: downloaded version %1 is not greater, than mine %2").arg(version).arg(AppKotatoVersion));
+		} else if (int32(version) <= AppVersion) {
+			LOG(("Update Error: downloaded version %1 is not greater, than mine %2").arg(version).arg(AppVersion));
 			return false;
 		}
 
@@ -482,7 +485,7 @@ bool UnpackUpdate(const QString &filepath) {
 		}
 
 		// create tdata/version file
-		tempDir.mkdir(QDir(tempDirPath + qsl("/tdata")).absolutePath());
+		tempDir.mkdir(QDir(tempDirPath + u"/tdata"_q).absolutePath());
 		std::wstring versionString = FormatVersionDisplay(version).toStdWString();
 
 		const auto versionNum = VersionInt(version);
@@ -490,9 +493,9 @@ bool UnpackUpdate(const QString &filepath) {
 		VersionChar versionStr[32];
 		memcpy(versionStr, versionString.c_str(), versionLen);
 
-		QFile fVersion(tempDirPath + qsl("/tdata/version"));
+		QFile fVersion(tempDirPath + u"/tdata/version"_q);
 		if (!fVersion.open(QIODevice::WriteOnly)) {
-			LOG(("Update Error: cant write version file '%1'").arg(tempDirPath + qsl("/version")));
+			LOG(("Update Error: cant write version file '%1'").arg(tempDirPath + u"/version"_q));
 			return false;
 		}
 		fVersion.write((const char*)&versionNum, sizeof(VersionInt));
@@ -555,7 +558,7 @@ bool ParseCommonMap(
 	const auto types = (*it).toObject();
 	const auto list = [&]() -> std::vector<QString> {
 		if (cAlphaVersion()) {
-			return { AppKotatoTestBranch };
+			return { "alpha", "beta", "stable" };
 		} else if (cInstallBetaVersion()) {
 			return { "beta", "stable" };
 		}
@@ -578,7 +581,7 @@ bool ParseCommonMap(
 		if (version == map.constEnd()) {
 			continue;
 		}
-		const auto isAvailableAlpha = (type == AppKotatoTestBranch);
+		const auto isAvailableAlpha = (type == "alpha");
 		const auto availableVersion = [&] {
 			if ((*version).isString()) {
 				const auto string = (*version).toString();
@@ -649,8 +652,10 @@ HttpChecker::HttpChecker(bool testing) : Checker(testing) {
 }
 
 void HttpChecker::start() {
+	const auto updaterVersion = Platform::AutoUpdateVersion();
 	const auto path = Local::readAutoupdatePrefix()
-		+ qstr("/current");
+		+ qstr("/current")
+		+ (updaterVersion > 1 ? QString::number(updaterVersion) : QString());
 	auto url = QUrl(path);
 	DEBUG_LOG(("Update Info: requesting update state"));
 	const auto request = QNetworkRequest(url);
@@ -718,7 +723,7 @@ std::optional<QString> HttpChecker::parseOldResponse(
 		const QByteArray &response) const {
 	const auto string = QString::fromLatin1(response);
 	const auto old = QRegularExpression(
-		qsl("^\\s*(\\d+)\\s*:\\s*([\\x21-\\x7f]+)\\s*$")
+		u"^\\s*(\\d+)\\s*:\\s*([\\x21-\\x7f]+)\\s*$"_q
 	).match(string);
 	if (!old.hasMatch()) {
 		return std::nullopt;
@@ -772,7 +777,7 @@ QString HttpChecker::validateLatestUrl(
 		QString url) const {
 	const auto myVersion = isAvailableAlpha
 		? cAlphaVersion()
-		: uint64(AppKotatoVersion);
+		: uint64(AppVersion);
 	const auto validVersion = (cAlphaVersion() || !isAvailableAlpha);
 	if (!validVersion || availableVersion <= myVersion) {
 		return QString();
@@ -866,7 +871,7 @@ void HttpLoaderActor::gotMetaData() {
 	const auto pairs = _reply->rawHeaderPairs();
 	for (const auto &pair : pairs) {
 		if (QString::fromUtf8(pair.first).toLower() == "content-range") {
-			const auto m = QRegularExpression(qsl("/(\\d+)([^\\d]|$)")).match(QString::fromUtf8(pair.second));
+			const auto m = QRegularExpression(u"/(\\d+)([^\\d]|$)"_q).match(QString::fromUtf8(pair.second));
 			if (m.hasMatch()) {
 				_parent->writeChunk({}, m.captured(1).toInt());
 			}
@@ -928,7 +933,9 @@ void MtpChecker::start() {
 		crl::on_main(this, [=] { fail(); });
 		return;
 	}
-	const auto feed = "ktghbcfeed";
+	const auto updaterVersion = Platform::AutoUpdateVersion();
+	const auto feed = "tdhbcfeed"
+		+ (updaterVersion > 1 ? QString::number(updaterVersion) : QString());
 	MTP::ResolveChannel(&_mtp, feed, [=](
 			const MTPInputChannel &channel) {
 		_mtp.send(
@@ -1030,7 +1037,7 @@ auto MtpChecker::parseText(const QByteArray &text) const
 auto MtpChecker::validateLatestLocation(
 		uint64 availableVersion,
 		const FileLocation &location) const -> FileLocation {
-	const auto myVersion = uint64(AppKotatoVersion);
+	const auto myVersion = uint64(AppVersion);
 	return (availableVersion <= myVersion) ? FileLocation() : location;
 }
 
@@ -1499,16 +1506,16 @@ int UpdateChecker::size() const {
 //}
 
 bool checkReadyUpdate() {
-	QString readyFilePath = cWorkingDir() + qsl("tupdates/temp/ready"), readyPath = cWorkingDir() + qsl("tupdates/temp");
+	QString readyFilePath = cWorkingDir() + u"tupdates/temp/ready"_q, readyPath = cWorkingDir() + u"tupdates/temp"_q;
 	if (!QFile(readyFilePath).exists() || cExeName().isEmpty()) {
-		if (QDir(cWorkingDir() + qsl("tupdates/ready")).exists() || QDir(cWorkingDir() + qsl("tupdates/temp")).exists()) {
+		if (QDir(cWorkingDir() + u"tupdates/ready"_q).exists() || QDir(cWorkingDir() + u"tupdates/temp"_q).exists()) {
 			ClearAll();
 		}
 		return false;
 	}
 
 	// check ready version
-	QString versionPath = readyPath + qsl("/tdata/version");
+	QString versionPath = readyPath + u"/tdata/version"_q;
 	{
 		QFile fVersion(versionPath);
 		if (!fVersion.open(QIODevice::ReadOnly)) {
@@ -1525,17 +1532,17 @@ bool checkReadyUpdate() {
 		if (versionNum == 0x7FFFFFFF) { // alpha version
 			quint64 alphaVersion = 0;
 			if (fVersion.read((char*)&alphaVersion, sizeof(quint64)) != sizeof(quint64)) {
-				LOG(("Update Error: cant read test version from file '%1'").arg(versionPath));
+				LOG(("Update Error: cant read alpha version from file '%1'").arg(versionPath));
 				ClearAll();
 				return false;
 			}
 			if (!cAlphaVersion() || alphaVersion <= cAlphaVersion()) {
-				LOG(("Update Error: cant install test version %1 having %2 version %3").arg(alphaVersion).arg(AppKotatoTestBranch).arg(cAlphaVersion()));
+				LOG(("Update Error: cant install alpha version %1 having alpha version %2").arg(alphaVersion).arg(cAlphaVersion()));
 				ClearAll();
 				return false;
 			}
-		} else if (versionNum <= AppKotatoVersion) {
-			LOG(("Update Error: cant install version %1 having version %2").arg(versionNum).arg(AppKotatoVersion));
+		} else if (versionNum <= AppVersion) {
+			LOG(("Update Error: cant install version %1 having version %2").arg(versionNum).arg(AppVersion));
 			ClearAll();
 			return false;
 		}
@@ -1543,14 +1550,14 @@ bool checkReadyUpdate() {
 	}
 
 #ifdef Q_OS_WIN
-	QString curUpdater = (cExeDir() + qsl("Updater.exe"));
-	QFileInfo updater(cWorkingDir() + qsl("tupdates/temp/Updater.exe"));
+	QString curUpdater = (cExeDir() + u"Updater.exe"_q);
+	QFileInfo updater(cWorkingDir() + u"tupdates/temp/Updater.exe"_q);
 #elif defined Q_OS_MAC // Q_OS_WIN
-	QString curUpdater = (cExeDir() + cExeName() + qsl("/Contents/Frameworks/Updater"));
-	QFileInfo updater(cWorkingDir() + qsl("tupdates/temp/Kotatogram.app/Contents/Frameworks/Updater"));
+	QString curUpdater = (cExeDir() + cExeName() + u"/Contents/Frameworks/Updater"_q);
+	QFileInfo updater(cWorkingDir() + u"tupdates/temp/Telegram.app/Contents/Frameworks/Updater"_q);
 #elif defined Q_OS_UNIX // Q_OS_MAC
-	QString curUpdater = (cExeDir() + qsl("Updater"));
-	QFileInfo updater(cWorkingDir() + qsl("tupdates/temp/Updater"));
+	QString curUpdater = (cExeDir() + u"Updater"_q);
+	QFileInfo updater(cWorkingDir() + u"tupdates/temp/Updater"_q);
 #endif // Q_OS_UNIX
 	if (!updater.exists()) {
 		QFileInfo current(curUpdater);
@@ -1630,33 +1637,34 @@ void UpdateApplication() {
 			return "https://www.microsoft.com/en-us/store/p/telegram-desktop/9nztwsqntd0s";
 #elif defined OS_MAC_STORE // OS_WIN_STORE
 			return "https://itunes.apple.com/ae/app/telegram-desktop/id946399090";
-#elif defined Q_OS_UNIX && !defined Q_OS_MAC // OS_WIN_STORE || OS_MAC_STORE
-			if (Platform::InFlatpak()) {
-				return "https://flathub.org/apps/details/io.github.kotatogram";
-			//} else if (Platform::InSnap()) {
-			//	return "https://snapcraft.io/telegram-desktop";
+#else // OS_WIN_STORE || OS_MAC_STORE
+			if (KSandbox::isFlatpak()) {
+				return "https://flathub.org/apps/details/org.telegram.desktop";
+			} else if (KSandbox::isSnap()) {
+				return "https://snapcraft.io/telegram-desktop";
 			}
-			return "https://github.com/kotatogram/kotatogram-desktop";
-#else // OS_WIN_STORE || OS_MAC_STORE || (defined Q_OS_UNIX && !defined Q_OS_MAC)
-			return "https://github.com/kotatogram/kotatogram-desktop";
-#endif // OS_WIN_STORE || OS_MAC_STORE || (defined Q_OS_UNIX && !defined Q_OS_MAC)
+			return "https://desktop.telegram.org";
+#endif // OS_WIN_STORE || OS_MAC_STORE
 		}();
 		UrlClickHandler::Open(url);
 	} else {
 		cSetAutoUpdate(true);
-		if (const auto window = App::wnd()) {
+		const auto window = Core::IsAppLaunched()
+			? Core::App().primaryWindow()
+			: nullptr;
+		if (window) {
 			if (const auto controller = window->sessionController()) {
 				controller->showSection(
 					std::make_shared<Info::Memento>(
 						Info::Settings::Tag{ controller->session().user() },
-						Info::Section::SettingsType::Advanced),
+						::Settings::Advanced::Id()),
 					Window::SectionShow());
 			} else {
-				window->showSpecialLayer(
-					Box<::Settings::LayerWidget>(&window->controller()),
+				window->widget()->showSpecialLayer(
+					Box<::Settings::LayerWidget>(window),
 					anim::type::normal);
 			}
-			window->showFromTray();
+			window->widget()->showFromTray();
 		}
 		cSetLastUpdateCheck(0);
 		Core::UpdateChecker().start();
@@ -1665,7 +1673,7 @@ void UpdateApplication() {
 
 QString countAlphaVersionSignature(uint64 version) { // duplicated in packer.cpp
 	if (cAlphaPrivateKey().isEmpty()) {
-		//LOG(("Error: Trying to count alpha version signature without alpha private key!"));
+		LOG(("Error: Trying to count alpha version signature without alpha private key!"));
 		return QString();
 	}
 

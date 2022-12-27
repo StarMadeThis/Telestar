@@ -30,7 +30,6 @@ PluralResult Plural(
 	ushort keyBase,
 	float64 value,
 	lngtag_count type);
-ushort PluralShift(float64 value, bool isShortened = false);
 void UpdatePluralRules(const QString &languageId);
 
 template <typename ResultString>

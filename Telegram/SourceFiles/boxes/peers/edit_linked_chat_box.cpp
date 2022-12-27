@@ -17,10 +17,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h" // Ui::Text::ToUpper
 #include "boxes/peer_list_box.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/toasts/common_toasts.h"
 #include "boxes/add_contact_box.h"
 #include "apiwrap.h"
-#include "facades.h"
 #include "main/main_session.h"
+#include "window/window_session_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_info.h"
@@ -32,10 +33,12 @@ constexpr auto kEnableSearchRowsCount = 10;
 class Controller : public PeerListController, public base::has_weak_ptr {
 public:
 	Controller(
+		not_null<Window::SessionNavigation*> navigation,
 		not_null<ChannelData*> channel,
 		ChannelData *chat,
 		const std::vector<not_null<PeerData*>> &chats,
-		Fn<void(ChannelData*)> callback);
+		Fn<void(ChannelData*)> callback,
+		Fn<void(not_null<PeerData*>)> showHistoryCallback);
 
 	Main::Session &session() const override;
 	void prepare() override;
@@ -46,24 +49,31 @@ private:
 	void choose(not_null<ChannelData*> chat);
 	void choose(not_null<ChatData*> chat);
 
+	not_null<Window::SessionNavigation*> _navigation;
 	not_null<ChannelData*> _channel;
 	ChannelData *_chat = nullptr;
 	std::vector<not_null<PeerData*>> _chats;
 	Fn<void(ChannelData*)> _callback;
+	Fn<void(not_null<PeerData*>)> _showHistoryCallback;
 
 	ChannelData *_waitForFull = nullptr;
 
+	rpl::event_stream<not_null<PeerData*>> _showHistoryRequest;
 };
 
 Controller::Controller(
+	not_null<Window::SessionNavigation*> navigation,
 	not_null<ChannelData*> channel,
 	ChannelData *chat,
 	const std::vector<not_null<PeerData*>> &chats,
-	Fn<void(ChannelData*)> callback)
-: _channel(channel)
+	Fn<void(ChannelData*)> callback,
+	Fn<void(not_null<PeerData*>)> showHistoryCallback)
+: _navigation(navigation)
+, _channel(channel)
 , _chat(chat)
 , _chats(std::move(chats))
-, _callback(std::move(callback)) {
+, _callback(std::move(callback))
+, _showHistoryCallback(std::move(showHistoryCallback)) {
 	channel->session().changes().peerUpdates(
 		Data::PeerUpdate::Flag::FullInfo
 	) | rpl::filter([=](const Data::PeerUpdate &update) {
@@ -109,7 +119,7 @@ void Controller::prepare() {
 
 void Controller::rowClicked(not_null<PeerListRow*> row) {
 	if (_chat != nullptr) {
-		Ui::showPeerHistory(_chat, ShowAtUnreadMsgId);
+		_showHistoryCallback(_chat);
 		return;
 	}
 	const auto peer = row->peer();
@@ -126,12 +136,16 @@ void Controller::rowClicked(not_null<PeerListRow*> row) {
 }
 
 void Controller::choose(not_null<ChannelData*> chat) {
+	if (chat->isForum()) {
+		ShowForumForDiscussionError(_navigation);
+		return;
+	}
 	auto text = tr::lng_manage_discussion_group_sure(
 		tr::now,
 		lt_group,
-		Ui::Text::Bold(chat->name),
+		Ui::Text::Bold(chat->name()),
 		lt_channel,
-		Ui::Text::Bold(_channel->name),
+		Ui::Text::Bold(_channel->name()),
 		Ui::Text::WithEntities);
 	if (!_channel->isPublic()) {
 		text.append(
@@ -152,11 +166,12 @@ void Controller::choose(not_null<ChannelData*> chat) {
 		const auto onstack = _callback;
 		onstack(chat);
 	};
-	Ui::show(
-		Box<Ui::ConfirmBox>(
-			text,
-			tr::lng_manage_discussion_group_link(tr::now),
-			sure),
+	delegate()->peerListShowBox(
+		Ui::MakeConfirmBox({
+			.text = text,
+			.confirmed = sure,
+			.confirmText = tr::lng_manage_discussion_group_link(tr::now),
+		}),
 		Ui::LayerOption::KeepOther);
 }
 
@@ -164,9 +179,9 @@ void Controller::choose(not_null<ChatData*> chat) {
 	auto text = tr::lng_manage_discussion_group_sure(
 		tr::now,
 		lt_group,
-		Ui::Text::Bold(chat->name),
+		Ui::Text::Bold(chat->name()),
 		lt_channel,
-		Ui::Text::Bold(_channel->name),
+		Ui::Text::Bold(_channel->name()),
 		Ui::Text::WithEntities);
 	if (!_channel->isPublic()) {
 		text.append("\n\n" + tr::lng_manage_linked_channel_private(tr::now));
@@ -184,11 +199,12 @@ void Controller::choose(not_null<ChatData*> chat) {
 		};
 		chat->session().api().migrateChat(chat, crl::guard(this, done));
 	};
-	Ui::show(
-		Box<Ui::ConfirmBox>(
-			text,
-			tr::lng_manage_discussion_group_link(tr::now),
-			sure),
+	delegate()->peerListShowBox(
+		Ui::MakeConfirmBox({
+			.text = text,
+			.confirmed = sure,
+			.confirmText = tr::lng_manage_discussion_group_link(tr::now),
+		}),
 		Ui::LayerOption::KeepOther);
 }
 
@@ -205,13 +221,13 @@ object_ptr<Ui::RpWidget> SetupAbout(
 			return tr::lng_manage_linked_channel_about(
 				tr::now,
 				lt_channel,
-				Ui::Text::Bold(chat->name),
+				Ui::Text::Bold(chat->name()),
 				Ui::Text::WithEntities);
 		} else if (chat != nullptr) {
 			return tr::lng_manage_discussion_group_about_chosen(
 				tr::now,
 				lt_group,
-				Ui::Text::Bold(chat->name),
+				Ui::Text::Bold(chat->name()),
 				Ui::Text::WithEntities);
 		}
 		return tr::lng_manage_discussion_group_about(
@@ -246,11 +262,11 @@ object_ptr<Ui::RpWidget> SetupCreateGroup(
 		st::infoCreateLinkedChatButton);
 	result->addClickHandler([=] {
 		const auto guarded = crl::guard(parent, callback);
-		Ui::show(
+		Window::Show(navigation).showBox(
 			Box<GroupInfoBox>(
 				navigation,
 				GroupInfoBox::Type::Megagroup,
-				channel->name + " Chat",
+				channel->name() + " Chat",
 				guarded),
 			Ui::LayerOption::KeepOther);
 	});
@@ -310,11 +326,19 @@ object_ptr<Ui::BoxContent> EditLinkedChatBox(
 			: tr::lng_manage_linked_channel());
 		box->addButton(tr::lng_close(), [=] { box->closeBox(); });
 	};
+	auto showHistoryCallback = [=](not_null<PeerData*> peer) {
+		navigation->showPeerHistory(
+			peer,
+			Window::SectionShow::Way::ClearStack,
+			ShowAtUnreadMsgId);
+	};
 	auto controller = std::make_unique<Controller>(
+		navigation,
 		channel,
 		chat,
 		std::move(chats),
-		std::move(callback));
+		std::move(callback),
+		std::move(showHistoryCallback));
 	return Box<PeerListBox>(std::move(controller), init);
 }
 
@@ -347,4 +371,14 @@ object_ptr<Ui::BoxContent> EditLinkedChatBox(
 		{},
 		canEdit,
 		callback);
+}
+
+void ShowForumForDiscussionError(
+		not_null<Window::SessionNavigation*> navigation) {
+	Ui::ShowMultilineToast({
+		.parentOverride = Window::Show(navigation).toastParent(),
+		.text = tr::lng_forum_topics_no_discussion(
+			tr::now,
+			Ui::Text::RichLangValue),
+	});
 }

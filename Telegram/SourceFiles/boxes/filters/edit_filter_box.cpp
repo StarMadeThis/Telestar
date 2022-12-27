@@ -7,24 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "boxes/filters/edit_filter_box.h"
 
-#include "kotato/kotato_lang.h"
-#include "kotato/kotato_settings.h"
 #include "boxes/filters/edit_filter_chats_list.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "ui/layers/generic_box.h"
-#include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
-#include "ui/widgets/checkbox.h"
+#include "ui/text/text_options.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/input_fields.h"
 #include "ui/effects/panel_animation.h"
 #include "ui/filter_icons.h"
 #include "ui/filter_icon_panel.h"
+#include "ui/painter.h"
 #include "data/data_chat_filters.h"
 #include "data/data_peer.h"
-#include "data/data_user.h"
-#include "data/data_chat.h"
-#include "data/data_channel.h"
+#include "data/data_peer_values.h" // Data::AmPremiumValue.
 #include "data/data_session.h"
 #include "core/application.h"
 #include "core/core_settings.h"
@@ -33,7 +29,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "history/history.h"
 #include "main/main_session.h"
-#include "main/main_account.h"
 #include "window/window_session_controller.h"
 #include "window/window_controller.h"
 #include "apiwrap.h"
@@ -41,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_window.h"
+#include "styles/style_chat.h"
 
 namespace {
 
@@ -62,12 +58,6 @@ constexpr auto kAllTypes = {
 	Flag::NoMuted,
 	Flag::NoRead,
 	Flag::NoArchived,
-	Flag::Owned,
-	Flag::Admin,
-	Flag::NotOwned,
-	Flag::NotAdmin,
-	Flag::Recent,
-	Flag::NoFilter,
 };
 
 class FilterChatsPreview final : public Ui::RpWidget {
@@ -94,7 +84,8 @@ private:
 	};
 	struct PeerButton {
 		not_null<History*> history;
-		std::shared_ptr<Data::CloudImageView> userpic;
+		Ui::PeerUserpicView userpic;
+		Ui::Text::String name;
 		Button button;
 	};
 
@@ -140,9 +131,7 @@ not_null<FilterChatsPreview*> SetupChatsPreview(
 			(rules.flags() & ~flag),
 			rules.always(),
 			rules.pinned(),
-			rules.never(),
-			rules.isDefault(),
-			rules.isLocal());
+			rules.never());
 		updateDefaultTitle(computed);
 		*data = std::move(computed);
 	}, preview->lifetime());
@@ -163,9 +152,7 @@ not_null<FilterChatsPreview*> SetupChatsPreview(
 			rules.flags(),
 			std::move(always),
 			std::move(pinned),
-			std::move(never),
-			rules.isDefault(),
-			rules.isLocal());
+			std::move(never));
 		updateDefaultTitle(computed);
 		*data = std::move(computed);
 	}, preview->lifetime());
@@ -225,7 +212,7 @@ int FilterChatsPreview::resizeGetHeight(int newWidth) {
 	for (const auto &[flag, button] : _removeFlag) {
 		moveNextButton(button.get());
 	}
-	for (const auto &[history, userpic, button] : _removePeer) {
+	for (const auto &[history, userpic, name, button] : _removePeer) {
 		moveNextButton(button.get());
 	}
 	return top;
@@ -240,8 +227,6 @@ void FilterChatsPreview::paintEvent(QPaintEvent *e) {
 	const auto nameLeft = st.namePosition.x();
 	p.setFont(st::windowFilterSmallItem.nameStyle.font);
 	const auto nameTop = st.namePosition.y();
-	const auto chatNameTop = st.chatNamePosition.y();
-	const auto chatDescTop = st.chatDescPosition.y();
 	for (const auto &[flag, button] : _removeFlag) {
 		PaintFilterChatsTypeIcon(
 			p,
@@ -259,10 +244,7 @@ void FilterChatsPreview::paintEvent(QPaintEvent *e) {
 			FilterChatsTypeName(flag));
 		top += st.height;
 	}
-
-	QStringList statuses;
-
-	for (auto &[history, userpic, button] : _removePeer) {
+	for (auto &[history, userpic, name, button] : _removePeer) {
 		const auto savedMessages = history->peer->isSelf();
 		const auto repliesMessages = history->peer->isRepliesChat();
 		if (savedMessages || repliesMessages) {
@@ -297,90 +279,19 @@ void FilterChatsPreview::paintEvent(QPaintEvent *e) {
 				top + iconTop,
 				width(),
 				st.photoSize);
-
-			if (history->peer->isUser()) {
-				const auto user = history->peer->asUser();
-				const auto flags = user->flags();
-
-				if (user->isInaccessible()) {
-					statuses << ktr("ktg_user_status_unaccessible");
-				} else {
-					if (user->isSupport()) {
-						statuses << tr::lng_status_support(tr::now);
-					}
-					if (user->isBot()) {
-						statuses << tr::lng_status_bot(tr::now);
-					} else if (flags & UserDataFlag::MutualContact) {
-						statuses << ktr("ktg_status_mutual_contact");
-					} else if (flags & UserDataFlag::Contact) {
-						statuses << ktr("ktg_status_contact");
-					} else {
-						statuses << ktr("ktg_status_non_contact");
-					}
-				}
-			} else if (history->peer->isChat()) {
-				statuses << tr::lng_group_status(tr::now);
-
-				const auto chat = history->peer->asChat();
-				if (!chat->amIn()) {
-					statuses << ktr("ktg_group_status_not_in");
-				} else if (chat->amCreator()) {
-					statuses << ktr("ktg_group_status_owner");
-				} else if (chat->hasAdminRights()) {
-					statuses << ktr("ktg_group_status_admin");
-				}
-
-			} else if (history->peer->isChannel()) {
-				if (history->peer->isMegagroup()) {
-					statuses << ktr("ktg_supergroup_status");
-				} else {
-					statuses << tr::lng_channel_status(tr::now);
-				}
-
-				const auto channel = history->peer->asChannel();
-				if (!channel->amIn()) {
-					statuses << (channel->isMegagroup()
-						? ktr("ktg_group_status_not_in")
-						: ktr("ktg_channel_status_not_in"));
-				} else if (channel->amCreator()) {
-					statuses << ktr("ktg_group_status_owner");
-				} else if (channel->hasAdminRights()) {
-					statuses << ktr("ktg_group_status_admin");
-				}
-			}
-
 			p.setPen(st::contactsNameFg);
-			if (statuses.empty()) {
-				p.setFont(st::windowFilterSmallItem.nameStyle.font);
-				history->peer->nameText().drawLeftElided(
-					p,
-					nameLeft,
-					top + nameTop,
-					button->x() - nameLeft,
-					width());
-			} else {
-				auto nameStr = Ui::Text::String{
-					st::windowFilterChatNameStyle,
-					history->peer->nameText().toString(),
-					Ui::NameTextOptions() };
-
-				nameStr.drawLeftElided(
-					p,
-					nameLeft,
-					top + chatNameTop,
-					button->x() - nameLeft,
-					width());
-
-				p.setPen(st::windowSubTextFg);
-				p.setFont(st::windowFilterChatDescStyle.font);
-				p.drawTextLeft(
-					nameLeft,
-					top + chatDescTop,
-					width(),
-					statuses.join(", "));
-
-				statuses.clear();
+			if (name.isEmpty()) {
+				name.setText(
+					st::msgNameStyle,
+					history->peer->name(),
+					Ui::NameTextOptions());
 			}
+			name.drawLeftElided(
+				p,
+				nameLeft,
+				top + nameTop,
+				button->x() - nameLeft,
+				width());
 		}
 		top += st.height;
 	}
@@ -426,8 +337,7 @@ void EditExceptions(
 			: tr::lng_filters_exclude_title()),
 		options,
 		rules.flags() & options,
-		include ? rules.always() : rules.never(),
-		rules.isLocal());
+		include ? rules.always() : rules.never());
 	const auto rawController = controller.get();
 	auto initBox = [=](not_null<PeerListBox*> box) {
 		box->setCloseByOutsideClick(false);
@@ -461,9 +371,7 @@ void EditExceptions(
 					| rawController->chosenOptions()),
 				include ? std::move(changed) : std::move(removeFrom),
 				std::move(pinned),
-				include ? std::move(removeFrom) : std::move(changed),
-				rules.isDefault(),
-				rules.isLocal());
+				include ? std::move(removeFrom) : std::move(changed));
 			updateDefaultTitle(computed);
 			*data = computed;
 			refresh();
@@ -510,12 +418,14 @@ void CreateIconSelector(
 	) | rpl::start_with_next([=] {
 		auto p = QPainter(toggle);
 		const auto icons = Ui::LookupFilterIcon(*type);
-		icons.normal->paintInCenter(p, toggle->rect(), st::emojiIconFg->c);
+		icons.normal->paintInCenter(
+			p,
+			toggle->rect(),
+			st::dialogsUnreadBgMuted->c);
 	}, toggle->lifetime());
 
 	const auto panel = toggle->lifetime().make_state<Ui::FilterIconPanel>(
-		outer,
-		rules.isLocal());
+		outer);
 	toggle->installEventFilter(panel);
 	toggle->addClickHandler([=] {
 		panel->toggleAnimated();
@@ -533,9 +443,7 @@ void CreateIconSelector(
 			rules.flags(),
 			rules.always(),
 			rules.pinned(),
-			rules.never(),
-			rules.isDefault(),
-			rules.isLocal());
+			rules.never());
 	}, panel->lifetime());
 
 	const auto updatePanelGeometry = [=] {
@@ -603,15 +511,15 @@ void EditFilterBox(
 		const Data::ChatFilter &filter,
 		Fn<void(const Data::ChatFilter &)> doneCallback) {
 	const auto creating = filter.title().isEmpty();
-	const auto isLocal = filter.isLocal();
-	box->setTitle(rpl::single(creating
-		? (isLocal
-			? ktr("ktg_filters_new_local")
-			: ktr("ktg_filters_new_cloud"))
-		: (isLocal
-			? ktr("ktg_filters_edit_local")
-			: ktr("ktg_filters_edit_cloud"))));
+	box->setWidth(st::boxWideWidth);
+	box->setTitle(creating ? tr::lng_filters_new() : tr::lng_filters_edit());
 	box->setCloseByOutsideClick(false);
+
+	Data::AmPremiumValue(
+		&window->session()
+	) | rpl::start_with_next([=] {
+		box->closeBox();
+	}, box->lifetime());
 
 	using State = rpl::variable<Data::ChatFilter>;
 	const auto data = box->lifetime().make_state<State>(filter);
@@ -624,10 +532,10 @@ void EditFilterBox(
 			tr::lng_filters_new_name(),
 			filter.title()),
 		st::markdownLinkFieldPadding);
-	if (!isLocal) {
-		name->setMaxLength(kMaxFilterTitleLength);
-	}
-	name->setInstantReplaces(Core::App().settings().instantReplacesValue());
+	name->setMaxLength(kMaxFilterTitleLength);
+	name->setInstantReplaces(Ui::InstantReplaces::Default());
+	name->setInstantReplacesEnabled(
+		Core::App().settings().replaceEmojiValue());
 	Ui::Emoji::SuggestionsController::Init(
 		box->getDelegate()->outerContainer(),
 		name,
@@ -645,9 +553,7 @@ void EditFilterBox(
 		if (nameEditing->custom) {
 			return;
 		}
-		const auto title = isLocal
-			? DefaultTitle(filter)
-			: TrimDefaultTitle(DefaultTitle(filter));
+		const auto title = TrimDefaultTitle(DefaultTitle(filter));
 		if (nameEditing->field->getLastText() != title) {
 			nameEditing->settingDefault = true;
 			nameEditing->field->setText(title);
@@ -671,31 +577,10 @@ void EditFilterBox(
 	constexpr auto kExcludeTypes = Flag::NoMuted
 		| Flag::NoArchived
 		| Flag::NoRead;
-	constexpr auto kExcludeTypesLocal = kExcludeTypes
-		| Flag::Owned
-		| Flag::Admin
-		| Flag::NotOwned
-		| Flag::NotAdmin
-		| Flag::Recent
-		| Flag::NoFilter;
 
 	box->setFocusCallback([=] {
 		name->setFocusFast();
 	});
-
-	const auto defaultFilterId = window->session().account().defaultFilterId();
-	const auto isCurrent = filter.id() == defaultFilterId;
-	const auto checkboxDefault = content->add(
-		object_ptr<Ui::Checkbox>(
-			box,
-			ktr("ktg_filters_default"),
-			(creating ? false : isCurrent),
-			st::defaultBoxCheckbox),
-		style::margins(
-			st::boxPadding.left(),
-			st::boxPadding.bottom(),
-			st::boxPadding.right(),
-			st::boxPadding.bottom()));
 
 	AddSkip(content);
 	AddDivider(content);
@@ -704,8 +589,9 @@ void EditFilterBox(
 
 	const auto includeAdd = AddButton(
 		content,
-		tr::lng_filters_add_chats() | Ui::Text::ToUpper(),
-		st::settingsUpdate);
+		tr::lng_filters_add_chats(),
+		st::settingsButtonActive,
+		{ &st::settingsIconAdd, 0, IconType::Round, &st::windowBgActive });
 
 	const auto include = SetupChatsPreview(
 		content,
@@ -715,43 +601,33 @@ void EditFilterBox(
 		&Data::ChatFilter::always);
 
 	AddSkip(content);
-	content->add(
-		object_ptr<Ui::FlatLabel>(
-			content,
-			tr::lng_filters_include_about(),
-			st::boxDividerLabel),
-		st::windowFilterAboutPadding);
-	AddDivider(content);
+	AddDividerText(content, tr::lng_filters_include_about());
 	AddSkip(content);
 
 	AddSubsectionTitle(content, tr::lng_filters_exclude());
 
 	const auto excludeAdd = AddButton(
 		content,
-		tr::lng_filters_remove_chats() | Ui::Text::ToUpper(),
-		st::settingsUpdate);
+		tr::lng_filters_remove_chats(),
+		st::settingsButtonActive,
+		{ &st::settingsIconRemove, 0, IconType::Round, &st::windowBgActive });
 
 	const auto exclude = SetupChatsPreview(
 		content,
 		data,
 		updateDefaultTitle,
-		(isLocal ? kExcludeTypesLocal : kExcludeTypes),
+		kExcludeTypes,
 		&Data::ChatFilter::never);
 
 	AddSkip(content);
-	content->add(
-		object_ptr<Ui::FlatLabel>(
-			content,
-			tr::lng_filters_exclude_about(),
-			st::boxDividerLabel),
-		st::windowFilterAboutPadding);
+	AddDividerText(content, tr::lng_filters_exclude_about());
 
 	const auto refreshPreviews = [=] {
 		include->updateData(
 			data->current().flags() & kTypes,
 			data->current().always());
 		exclude->updateData(
-			data->current().flags() & (isLocal ? kExcludeTypesLocal : kExcludeTypes),
+			data->current().flags() & kExcludeTypes,
 			data->current().never());
 	};
 	includeAdd->setClickedCallback([=] {
@@ -767,7 +643,7 @@ void EditFilterBox(
 		EditExceptions(
 			window,
 			box,
-			(isLocal ? kExcludeTypesLocal : kExcludeTypes),
+			kExcludeTypes,
 			data,
 			updateDefaultTitle,
 			refreshPreviews);
@@ -776,7 +652,6 @@ void EditFilterBox(
 	const auto save = [=] {
 		const auto title = name->getLastText().trimmed();
 		const auto rules = data->current();
-		const auto checked = checkboxDefault && checkboxDefault->checked();
 		const auto result = Data::ChatFilter(
 			rules.id(),
 			title,
@@ -784,9 +659,7 @@ void EditFilterBox(
 			rules.flags(),
 			rules.always(),
 			rules.pinned(),
-			rules.never(),
-			checked,
-			isLocal);
+			rules.never());
 		if (title.isEmpty()) {
 			name->showError();
 			return;
@@ -812,43 +685,27 @@ void EditFilterBox(
 void EditExistingFilter(
 		not_null<Window::SessionController*> window,
 		FilterId id) {
+	Expects(id != 0);
+
 	const auto session = &window->session();
-	const auto filters = &session->data().chatsFilters();
-	const auto &list = filters->list();
+	const auto &list = session->data().chatsFilters().list();
 	const auto i = ranges::find(list, id, &Data::ChatFilter::id);
 	if (i == end(list)) {
 		return;
 	}
 	const auto doneCallback = [=](const Data::ChatFilter &result) {
 		Expects(id == result.id());
-		auto needSave = false;
 
-		if (result.isLocal()) {
-			filters->set(result);
-			filters->saveLocal();
-			needSave = true;
-		} else {
-			const auto tl = result.tl();
-			session->data().chatsFilters().apply(MTP_updateDialogFilter(
-				MTP_flags(MTPDupdateDialogFilter::Flag::f_filter),
-				MTP_int(id),
-				tl));
-			session->api().request(MTPmessages_UpdateDialogFilter(
-				MTP_flags(MTPmessages_UpdateDialogFilter::Flag::f_filter),
-				MTP_int(id),
-				tl
-			)).send();
-		}
-		const auto defaultFilterId = session->account().defaultFilterId();
-		const auto isCurrentDefault = result.id() == defaultFilterId;
-		if ((isCurrentDefault && !result.isDefault())
-			|| (!isCurrentDefault && result.isDefault())) {
-			 session->account().setDefaultFilterId(result.isDefault() ? result.id() : 0);
-			needSave = true;
-		}
-		if (needSave) {
-			Kotato::JsonSettings::Write();
-		}
+		const auto tl = result.tl();
+		session->data().chatsFilters().apply(MTP_updateDialogFilter(
+			MTP_flags(MTPDupdateDialogFilter::Flag::f_filter),
+			MTP_int(id),
+			tl));
+		session->api().request(MTPmessages_UpdateDialogFilter(
+			MTP_flags(MTPmessages_UpdateDialogFilter::Flag::f_filter),
+			MTP_int(id),
+			tl
+		)).send();
 	};
 	window->window().show(Box(
 		EditFilterBox,

@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "history/history.h"
 #include "history/history_item.h"
-#include "history/view/history_view_element.h"
+#include "history/view/history_view_message.h"
 #include "history/view/history_view_cursor_state.h"
 #include "calls/calls_instance.h"
 #include "ui/chat/message_bubble.h"
@@ -23,7 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/ripple_animation.h"
 #include "ui/effects/fireworks_animation.h"
 #include "ui/toast/toast.h"
-#include "kotato/boxes/kotato_confirm_box.h"
+#include "ui/painter.h"
 #include "data/data_media_types.h"
 #include "data/data_poll.h"
 #include "data/data_user.h"
@@ -179,6 +179,11 @@ struct Poll::CloseInformation {
 	crl::time duration = 0;
 	base::Timer timer;
 	Ui::Animations::Basic radial;
+};
+
+struct Poll::RecentVoter {
+	not_null<UserData*> user;
+	mutable Ui::PeerUserpicView userpic;
 };
 
 template <typename Callback>
@@ -438,12 +443,8 @@ void Poll::checkQuizAnswered() {
 	}
 }
 
-void Poll::showSolution(bool inBox) const {
+void Poll::showSolution() const {
 	if (!_poll->solution.text.isEmpty()) {
-		if (inBox) {
-			Ui::show(Box<Kotato::InformBox>(_poll->solution));
-			return;
-		}
 		solutionToggled(true);
 		_parent->delegate()->elementShowTooltip(
 			_poll->solution,
@@ -890,33 +891,16 @@ void Poll::paintRecentVoters(
 
 	auto created = false;
 	for (auto &recent : _recentVoters) {
-		const auto was = (recent.userpic != nullptr);
+		const auto was = !recent.userpic.null();
 		recent.user->paintUserpic(p, recent.userpic, x, y, size);
-		if (!was && recent.userpic) {
+		if (!was && !recent.userpic.null()) {
 			created = true;
 		}
-		const auto paintContent = [&](Painter &p) {
+		const auto paintContent = [&](QPainter &p) {
 			p.setPen(pen);
 			p.setBrush(Qt::NoBrush);
 			PainterHighQualityEnabler hq(p);
-			switch (KotatoImageRoundRadius()) {
-				case ImageRoundRadius::None:
-					p.drawRoundedRect(QRect{ x, y, size, size }, 0, 0);
-					break;
-
-				case ImageRoundRadius::Small:
-					p.drawRoundedRect(QRect{ x, y, size, size },
-						st::buttonRadius, st::buttonRadius);
-					break;
-
-				case ImageRoundRadius::Large:
-					p.drawRoundedRect(QRect{ x, y, size, size },
-						st::dateRadius, st::dateRadius);
-					break;
-
-				default:
-					p.drawEllipse(x, y, size, size);
-			}
+			p.drawEllipse(x, y, size, size);
 		};
 		if (usesBubblePattern(context)) {
 			const auto add = st::lineWidth * 2;
@@ -1019,7 +1003,7 @@ void Poll::paintShowSolution(
 	}
 	if (!_showSolutionLink) {
 		_showSolutionLink = std::make_shared<LambdaClickHandler>(
-			crl::guard(this, [=] { showSolution(true); }));
+			crl::guard(this, [=] { showSolution(); }));
 	}
 	const auto stm = context.messageStyle();
 	const auto &icon = stm->historyQuizExplain;
@@ -1174,11 +1158,7 @@ void Poll::paintRadio(
 			auto pen = regular->p;
 			pen.setWidth(radio.thickness);
 			p.setPen(pen);
-			if (_flags & PollData::Flag::MultiChoice) {
-				p.drawRoundedRect(rect,	st::buttonRadius, st::buttonRadius);
-			} else {
-				p.drawEllipse(rect);
-			}
+			p.drawEllipse(rect);
 		}
 		if (checkmark > 0.) {
 			const auto removeFull = (radio.diameter / 2 - radio.thickness);
@@ -1188,13 +1168,7 @@ void Poll::paintRadio(
 			pen.setWidth(radio.thickness);
 			p.setPen(pen);
 			p.setBrush(color);
-			if (_flags & PollData::Flag::MultiChoice) {
-				p.drawRoundedRect(
-					rect.marginsRemoved({ removeNow, removeNow, removeNow, removeNow }),
-					st::buttonRadius, st::buttonRadius);
-			} else {
-				p.drawEllipse(rect.marginsRemoved({ removeNow, removeNow, removeNow, removeNow }));
-			}
+			p.drawEllipse(rect.marginsRemoved({ removeNow, removeNow, removeNow, removeNow }));
 			const auto &icon = stm->historyPollChosen;
 			icon.paint(p, left + (radio.diameter - icon.width()) / 2, top + (radio.diameter - icon.height()) / 2, width());
 		}
@@ -1280,14 +1254,9 @@ void Poll::paintFilling(
 			: stm->historyPollChoiceRight;
 		const auto cleft = aleft - st::historyPollPercentSkip - icon.width();
 		const auto ctop = ftop - (icon.height() - thickness) / 2;
-		if (_flags & PollData::Flag::MultiChoice) {
-			p.drawRoundedRect(
-				QRect{ cleft, ctop, icon.width(), icon.height() },
-				st::buttonRadius, st::buttonRadius);
-		} else {
-			p.drawEllipse(cleft, ctop, icon.width(), icon.height());
-		}
-		const auto paintContent = [&](Painter &p) {
+		p.drawEllipse(cleft, ctop, icon.width(), icon.height());
+
+		const auto paintContent = [&](QPainter &p) {
 			icon.paint(p, cleft, ctop, width);
 		};
 		if (style == Style::Default && usesBubblePattern(context)) {
@@ -1535,13 +1504,13 @@ void Poll::clickHandlerPressedChanged(
 
 void Poll::unloadHeavyPart() {
 	for (auto &recent : _recentVoters) {
-		recent.userpic = nullptr;
+		recent.userpic = {};
 	}
 }
 
 bool Poll::hasHeavyPart() const {
 	for (auto &recent : _recentVoters) {
-		if (recent.userpic) {
+		if (!recent.userpic.null()) {
 			return true;
 		}
 	}
@@ -1555,7 +1524,7 @@ void Poll::toggleRipple(Answer &answer, bool pressed) {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		if (!answer.ripple) {
-			auto mask = Ui::RippleAnimation::rectMask(QSize(
+			auto mask = Ui::RippleAnimation::RectMask(QSize(
 				outerWidth,
 				countAnswerHeight(answer, innerWidth)));
 			answer.ripple = std::make_unique<Ui::RippleAnimation>(
@@ -1604,29 +1573,20 @@ void Poll::toggleLinkRipple(bool pressed) {
 		const auto linkWidth = width();
 		const auto linkHeight = bottomButtonHeight();
 		if (!_linkRipple) {
-			const auto drawMask = [&](QPainter &p) {
-				const auto radius = st::historyMessageRadius;
-				p.drawRoundedRect(
-					0,
-					0,
-					linkWidth,
-					linkHeight,
-					radius,
-					radius);
-				p.fillRect(0, 0, linkWidth, radius * 2, Qt::white);
-			};
 			auto mask = isRoundedInBubbleBottom()
-				? Ui::RippleAnimation::maskByDrawer(
-					QSize(linkWidth, linkHeight),
-					false,
-					drawMask)
-				: Ui::RippleAnimation::rectMask({ linkWidth, linkHeight });
+				? static_cast<Message*>(_parent.get())->bottomRippleMask(
+					bottomButtonHeight())
+				: BottomRippleMask{
+					Ui::RippleAnimation::RectMask({ linkWidth, linkHeight }),
+				};
 			_linkRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
-				std::move(mask),
+				std::move(mask.image),
 				[=] { repaint(); });
+			_linkRippleShift = mask.shift;
 		}
-		_linkRipple->add(_lastLinkPoint - QPoint(0, height() - linkHeight));
+		_linkRipple->add(_lastLinkPoint
+			+ QPoint(_linkRippleShift, linkHeight - height()));
 	} else if (_linkRipple) {
 		_linkRipple->lastStop();
 	}

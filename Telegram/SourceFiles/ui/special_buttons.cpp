@@ -7,14 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/special_buttons.h"
 
-#include "styles/style_boxes.h"
-#include "styles/style_chat.h"
+#include "base/call_delayed.h"
 #include "dialogs/ui/dialogs_layout.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/image/image_prepare.h"
 #include "ui/empty_userpic.h"
 #include "ui/ui_utility.h"
+#include "data/notify/data_notify_settings.h"
 #include "data/data_photo.h"
 #include "data/data_session.h"
 #include "data/data_folder.h"
@@ -28,22 +28,74 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "core/application.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/painter.h"
 #include "editor/photo_editor_layer_widget.h"
 #include "media/streaming/media_streaming_instance.h"
 #include "media/streaming/media_streaming_player.h"
 #include "media/streaming/media_streaming_document.h"
+#include "settings/settings_calls.h" // Calls::AddCameraSubsection.
+#include "calls/calls_instance.h"
+#include "webrtc/webrtc_media_devices.h" // Webrtc::GetVideoInputList.
+#include "webrtc/webrtc_video_track.h"
+#include "ui/widgets/popup_menu.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
-#include "mainwidget.h"
-#include "facades.h"
+#include "styles/style_boxes.h"
+#include "styles/style_chat.h"
 
 namespace Ui {
 namespace {
 
 constexpr auto kAnimationDuration = crl::time(120);
+
+bool IsCameraAvailable() {
+	return (Core::App().calls().currentCall() == nullptr)
+		&& !Webrtc::GetVideoInputList().empty();
+}
+
+void CameraBox(
+		not_null<Ui::GenericBox*> box,
+		not_null<Window::Controller*> controller,
+		PeerData *peer,
+		Fn<void(QImage &&image)> &&doneCallback) {
+	using namespace Webrtc;
+
+	const auto track = Settings::Calls::AddCameraSubsection(
+		std::make_shared<Ui::BoxShow>(box),
+		box->verticalLayout(),
+		false);
+	if (!track) {
+		box->closeBox();
+		return;
+	}
+	track->stateValue(
+	) | rpl::start_with_next([=](const VideoState &state) {
+		if (state == VideoState::Inactive) {
+			box->closeBox();
+		}
+	}, box->lifetime());
+
+	auto done = [=, done = std::move(doneCallback)](QImage &&image) {
+		box->closeBox();
+		done(std::move(image));
+	};
+
+	box->setTitle(tr::lng_profile_camera_title());
+	box->addButton(tr::lng_continue(), [=, done = std::move(done)]() mutable {
+		Editor::PrepareProfilePhoto(
+			box,
+			controller,
+			((peer && peer->isForum())
+				? ImageRoundRadius::Large
+				: ImageRoundRadius::Ellipse),
+			std::move(done),
+			track->frame(FrameRequest()).mirrored(true, false));
+	});
+	box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+}
 
 QString CropTitle(not_null<PeerData*> peer) {
 	if (peer->isChat() || peer->isMegagroup()) {
@@ -79,7 +131,7 @@ HistoryDownButton::HistoryDownButton(QWidget *parent, const style::TwoIconButton
 }
 
 QImage HistoryDownButton::prepareRippleMask() const {
-	return Ui::RippleAnimation::ellipseMask(QSize(_st.rippleAreaSize, _st.rippleAreaSize));
+	return Ui::RippleAnimation::EllipseMask(QSize(_st.rippleAreaSize, _st.rippleAreaSize));
 }
 
 QPoint HistoryDownButton::prepareRippleStartPosition() const {
@@ -87,7 +139,7 @@ QPoint HistoryDownButton::prepareRippleStartPosition() const {
 }
 
 void HistoryDownButton::paintEvent(QPaintEvent *e) {
-	Painter p(this);
+	auto p = QPainter(this);
 
 	const auto over = isOver();
 	const auto down = isDown();
@@ -101,7 +153,7 @@ void HistoryDownButton::paintEvent(QPaintEvent *e) {
 		st.align = style::al_center;
 		st.font = st::historyToDownBadgeFont;
 		st.size = st::historyToDownBadgeSize;
-		st.sizeId = Dialogs::Ui::UnreadBadgeInHistoryToDown;
+		st.sizeId = Dialogs::Ui::UnreadBadgeSize::HistoryToDown;
 		Dialogs::Ui::PaintUnreadBadge(p, unreadString, width(), 0, st, 4);
 	}
 }
@@ -144,7 +196,7 @@ UserpicButton::UserpicButton(
 , _window(window)
 , _cropTitle(cropTitle)
 , _role(role) {
-	Expects(_role == Role::ChangePhoto);
+	Expects(_role == Role::ChangePhoto || _role == Role::ChoosePhoto);
 
 	_waiting = false;
 	prepare();
@@ -193,21 +245,30 @@ void UserpicButton::prepare() {
 		prepareUserpicPixmap();
 	}
 	setClickHandlerByRole();
+
+	if (_role == Role::ChangePhoto || _role == Role::OpenPhoto) {
+		chosenImages(
+		) | rpl::start_with_next([=](QImage &&image) {
+			setImage(std::move(image));
+			if (_requestToUpload) {
+				_uploadPhotoRequests.fire({});
+			}
+		}, lifetime());
+	}
 }
 
 void UserpicButton::setClickHandlerByRole() {
 	switch (_role) {
+	case Role::ChoosePhoto:
+		addClickHandler([=] { choosePhotoLocally(); });
+		break;
+
 	case Role::ChangePhoto:
-		addClickHandler(App::LambdaDelayed(
-			_st.changeButton.ripple.hideDuration,
-			this,
-			[=] { changePhotoLocally(); }));
+		addClickHandler([=] { changePhotoLocally(); });
 		break;
 
 	case Role::OpenPhoto:
-		addClickHandler([=] {
-			openPeerPhoto();
-		});
+		addClickHandler([=] { openPeerPhoto(); });
 		break;
 
 	case Role::OpenProfile:
@@ -220,20 +281,45 @@ void UserpicButton::setClickHandlerByRole() {
 	}
 }
 
-void UserpicButton::changePhotoLocally(bool requestToUpload) {
+void UserpicButton::changeTo(QImage &&image) {
+	setImage(std::move(image));
+}
+
+void UserpicButton::choosePhotoLocally() {
 	if (!_window) {
 		return;
 	}
 	auto callback = [=](QImage &&image) {
-		setImage(std::move(image));
-		if (requestToUpload) {
-			_uploadPhotoRequests.fire({});
-		}
+		_chosenImages.fire(std::move(image));
 	};
-	Editor::PrepareProfilePhoto(
-		this,
-		_window,
-		std::move(callback));
+	const auto chooseFile = [=] {
+		base::call_delayed(
+			_st.changeButton.ripple.hideDuration,
+			crl::guard(this, [=] {
+			Editor::PrepareProfilePhotoFromFile(
+				this,
+				_window,
+				((_peer && _peer->isForum())
+					? ImageRoundRadius::Large
+					: ImageRoundRadius::Ellipse),
+				callback);
+		}));
+	};
+	if (!IsCameraAvailable()) {
+		chooseFile();
+	} else {
+		_menu = base::make_unique_q<Ui::PopupMenu>(this);
+		_menu->addAction(tr::lng_attach_file(tr::now), chooseFile);
+		_menu->addAction(tr::lng_attach_camera(tr::now), [=] {
+			_window->show(Box(CameraBox, _window, _peer, callback));
+		});
+		_menu->popup(QCursor::pos());
+	}
+}
+
+void UserpicButton::changePhotoLocally(bool requestToUpload) {
+	_requestToUpload = requestToUpload;
+	choosePhotoLocally();
 }
 
 void UserpicButton::openPeerPhoto() {
@@ -268,7 +354,7 @@ void UserpicButton::setupPeerViewers() {
 	) | rpl::filter([=] {
 		return _waiting;
 	}) | rpl::start_with_next([=] {
-		if (!_userpicView || _userpicView->image()) {
+		if (!Ui::PeerUserpicLoading(_userpicView)) {
 			_waiting = false;
 			startNewPhotoShowing();
 		}
@@ -309,32 +395,18 @@ void UserpicButton::paintEvent(QPaintEvent *e) {
 		paintUserpicFrame(p, photoPosition);
 	}
 
-	if (_role == Role::ChangePhoto) {
+	const auto fillTranslatedShape = [&](const style::color &color) {
+		p.translate(photoLeft, photoTop);
+		fillShape(p, color);
+		p.translate(-photoLeft, -photoTop);
+	};
+
+	if (_role == Role::ChangePhoto || _role == Role::ChoosePhoto) {
 		auto over = isOver() || isDown();
 		if (over) {
-			PainterHighQualityEnabler hq(p);
-			p.setPen(Qt::NoPen);
-			p.setBrush(_userpicHasImage
+			fillTranslatedShape(_userpicHasImage
 				? st::msgDateImgBg
 				: _st.changeButton.textBgOver);
-			switch (KotatoImageRoundRadius()) {
-				case ImageRoundRadius::None:
-					p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize }, 0, 0);
-					break;
-
-				case ImageRoundRadius::Small:
-					p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize },
-						st::buttonRadius, st::buttonRadius);
-					break;
-
-				case ImageRoundRadius::Large:
-					p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize },
-						st::dateRadius, st::dateRadius);
-					break;
-
-				default:
-					p.drawEllipse(photoLeft, photoTop, _st.photoSize, _st.photoSize);
-			}
 		}
 		paintRipple(
 			p,
@@ -372,29 +444,7 @@ void UserpicButton::paintEvent(QPaintEvent *e) {
 				_st.photoSize,
 				barHeight);
 			p.setClipRect(rect);
-			{
-				PainterHighQualityEnabler hq(p);
-				p.setPen(Qt::NoPen);
-				p.setBrush(_st.uploadBg);
-				switch (KotatoImageRoundRadius()) {
-					case ImageRoundRadius::None:
-						p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize }, 0, 0);
-						break;
-
-					case ImageRoundRadius::Small:
-						p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize },
-							st::buttonRadius, st::buttonRadius);
-						break;
-
-					case ImageRoundRadius::Large:
-						p.drawRoundedRect(QRect{ photoLeft, photoTop, _st.photoSize, _st.photoSize },
-							st::dateRadius, st::dateRadius);
-						break;
-
-					default:
-						p.drawEllipse(photoLeft, photoTop, _st.photoSize, _st.photoSize);
-				}
-			}
+			fillTranslatedShape(_st.uploadBg);
 			auto iconLeft = (_st.uploadIconPosition.x() < 0)
 				? (_st.photoSize - _st.uploadIcon.width()) / 2
 				: _st.uploadIconPosition.x();
@@ -423,9 +473,22 @@ void UserpicButton::paintUserpicFrame(Painter &p, QPoint photoPosition) {
 			: false;
 		auto request = Media::Streaming::FrameRequest();
 		auto size = QSize{ _st.photoSize, _st.photoSize };
-		request.outer = size * cIntRetinaFactor();
-		request.resize = size * cIntRetinaFactor();
-		request.radius = KotatoImageRoundRadius();
+		const auto ratio = style::DevicePixelRatio();
+		request.outer = request.resize = size * ratio;
+		const auto forum = _peer && _peer->isForum();
+		if (forum) {
+			const auto radius = int(_st.photoSize
+				* Ui::ForumUserpicRadiusMultiplier());
+			if (_roundingCorners[0].width() != radius * ratio) {
+				_roundingCorners = Images::CornersMask(radius);
+			}
+			request.rounding = Images::CornersMaskRef(_roundingCorners);
+		} else {
+			if (_ellipseMask.size() != request.outer) {
+				_ellipseMask = Images::EllipseMask(size);
+			}
+			request.mask = _ellipseMask;
+		}
 		p.drawImage(QRect(photoPosition, size), _streamed->frame(request));
 		if (!paused) {
 			_streamed->markFrameShown();
@@ -446,21 +509,9 @@ QPoint UserpicButton::countPhotoPosition() const {
 }
 
 QImage UserpicButton::prepareRippleMask() const {
-	const auto size = QSize(_st.photoSize, _st.photoSize);
-
-	switch (KotatoImageRoundRadius()) {
-		case ImageRoundRadius::None:
-			return Ui::RippleAnimation::rectMask(size);
-
-		case ImageRoundRadius::Small:
-			return Ui::RippleAnimation::roundRectMask(size, st::buttonRadius);
-
-		case ImageRoundRadius::Large:
-			return Ui::RippleAnimation::roundRectMask(size, st::dateRadius);
-
-		default:
-			return Ui::RippleAnimation::ellipseMask(size);
-	}
+	return Ui::RippleAnimation::EllipseMask(QSize(
+		_st.photoSize,
+		_st.photoSize));
 }
 
 QPoint UserpicButton::prepareRippleStartPosition() const {
@@ -473,7 +524,7 @@ void UserpicButton::processPeerPhoto() {
 	Expects(_peer != nullptr);
 
 	_userpicView = _peer->createUserpicView();
-	_waiting = _userpicView && !_userpicView->image();
+	_waiting = Ui::PeerUserpicLoading(_userpicView);
 	if (_waiting) {
 		_peer->loadUserpic();
 	}
@@ -734,9 +785,10 @@ void UserpicButton::setImage(QImage &&image) {
 		size * cIntRetinaFactor(),
 		Qt::IgnoreAspectRatio,
 		Qt::SmoothTransformation);
-	small = Images::Round(std::move(small), KotatoImageRoundRadius());
-
-	_userpic = Ui::PixmapFromImage(std::move(small));
+	const auto forum = _peer && _peer->isForum();
+	_userpic = Ui::PixmapFromImage(forum
+		? Images::Round(std::move(small), Images::Option::RoundLarge)
+		: Images::Circle(std::move(small)));
 	_userpic.setDevicePixelRatio(cRetinaFactor());
 	_userpicCustom = _userpicHasImage = true;
 	_result = std::move(image);
@@ -744,42 +796,32 @@ void UserpicButton::setImage(QImage &&image) {
 	startNewPhotoShowing();
 }
 
+void UserpicButton::fillShape(QPainter &p, const style::color &color) const {
+	PainterHighQualityEnabler hq(p);
+	p.setPen(Qt::NoPen);
+	p.setBrush(color);
+	const auto size = _st.photoSize;
+	if (_peer && _peer->isForum()) {
+		const auto radius = size * Ui::ForumUserpicRadiusMultiplier();
+		p.drawRoundedRect(0, 0, size, size, radius, radius);
+	} else {
+		p.drawEllipse(0, 0, size, size);
+	}
+}
+
 void UserpicButton::prepareUserpicPixmap() {
 	if (_userpicCustom) {
 		return;
 	}
 	auto size = _st.photoSize;
-	auto paintButton = [&](Painter &p, const style::color &color) {
-		PainterHighQualityEnabler hq(p);
-		p.setBrush(color);
-		p.setPen(Qt::NoPen);
-		switch (KotatoImageRoundRadius()) {
-			case ImageRoundRadius::None:
-				p.drawRoundedRect(QRect{ 0, 0, size, size }, 0, 0);
-				break;
-
-			case ImageRoundRadius::Small:
-				p.drawRoundedRect(QRect{ 0, 0, size, size },
-					st::buttonRadius, st::buttonRadius);
-				break;
-
-			case ImageRoundRadius::Large:
-				p.drawRoundedRect(QRect{ 0, 0, size, size },
-					st::dateRadius, st::dateRadius);
-				break;
-
-			default:
-				p.drawEllipse(0, 0, size, size);
-		}
-	};
 	_userpicHasImage = _peer
-		? (_peer->currentUserpic(_userpicView) || _role != Role::ChangePhoto)
-		: false;
+		&& (_peer->userpicCloudImage(_userpicView)
+			|| _role != Role::ChangePhoto);
 	_userpic = CreateSquarePixmap(size, [&](Painter &p) {
 		if (_userpicHasImage) {
 			_peer->paintUserpic(p, _userpicView, 0, 0, _st.photoSize);
 		} else {
-			paintButton(p, _st.changeButton.textBg);
+			fillShape(p, _st.changeButton.textBg);
 		}
 	});
 	_userpicUniqueKey = _userpicHasImage
@@ -787,41 +829,29 @@ void UserpicButton::prepareUserpicPixmap() {
 		: InMemoryKey();
 }
 
-rpl::producer<> UserpicButton::uploadPhotoRequests() const {
-	return _uploadPhotoRequests.events();
-}
-
 SilentToggle::SilentToggle(QWidget *parent, not_null<ChannelData*> channel)
 : RippleButton(parent, st::historySilentToggle.ripple)
 , _st(st::historySilentToggle)
-, _colorOver(st::historyComposeIconFgOver->c)
 , _channel(channel)
-, _checked(channel->owner().notifySilentPosts(_channel))
-, _crossLine(st::historySilentToggleCrossLine) {
-	Expects(!channel->owner().notifySilentPostsUnknown(_channel));
+, _checked(channel->owner().notifySettings().silentPosts(_channel)) {
+	Expects(!channel->owner().notifySettings().silentPostsUnknown(_channel));
 
 	resize(_st.width, _st.height);
 
-	style::PaletteChanged(
-	) | rpl::start_with_next([=] {
-		_crossLine.invalidate();
-	}, lifetime());
-
 	paintRequest(
 	) | rpl::start_with_next([=](const QRect &clip) {
-		Painter p(this);
+		auto p = QPainter(this);
 		paintRipple(p, _st.rippleAreaPosition, nullptr);
 
-		_crossLine.paint(
-			p,
-			(width() - _st.icon.width()) / 2,
-			(height() - _st.icon.height()) / 2,
-			_crossLineAnimation.value(_checked ? 1. : 0.),
-			// Since buttons of the compose controls have no duration
-			// for the over animation, we can skip this animation here.
-			isOver()
-				? std::make_optional<QColor>(_colorOver)
-				: std::nullopt);
+		//const auto checked = _crossLineAnimation.value(_checked ? 1. : 0.);
+		const auto over = isOver();
+		(_checked
+			? (over
+				? st::historySilentToggleOnOver
+				: st::historySilentToggleOn)
+			: (over
+				? st::historySilentToggle.iconOver
+				: st::historySilentToggle.icon)).paintInCenter(p, rect());
 	}, lifetime());
 
 	setMouseTracking(true);
@@ -856,10 +886,7 @@ void SilentToggle::mouseReleaseEvent(QMouseEvent *e) {
 	setChecked(!_checked);
 	RippleButton::mouseReleaseEvent(e);
 	Ui::Tooltip::Show(0, this);
-	_channel->owner().updateNotifySettings(
-		_channel,
-		std::nullopt,
-		_checked);
+	_channel->owner().notifySettings().update(_channel, {}, _checked);
 }
 
 QString SilentToggle::tooltipText() const {
@@ -886,7 +913,7 @@ QPoint SilentToggle::prepareRippleStartPosition() const {
 }
 
 QImage SilentToggle::prepareRippleMask() const {
-	return RippleAnimation::ellipseMask(
+	return RippleAnimation::EllipseMask(
 		QSize(_st.rippleAreaSize, _st.rippleAreaSize));
 }
 

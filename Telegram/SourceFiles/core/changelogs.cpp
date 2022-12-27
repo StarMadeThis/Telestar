@@ -7,11 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/changelogs.h"
 
-#include "kotato/kotato_lang.h"
-#include "kotato/kotato_version.h"
-#include "storage/localstorage.h"
 #include "lang/lang_keys.h"
-#include "lang/lang_instance.h"
 #include "core/application.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
@@ -27,79 +23,73 @@ namespace {
 std::map<int, const char*> BetaLogs() {
 	return {
 	{
-		3002006,
-		"- Try out the new audio player with playlist shuffle and repeat.\n"
+		4000003,
+		"- Animated emoji for messages.\n"
 
-		"- Give a custom name to your desktop session "
-		"to distinguish it in the sessions list.\n"
+		"- Premium: Privacy settings for voice messages.\n"
+
+		"- Premium: Gifting Telegram Premium "
+		"to any user from their profile page.\n"
 	},
 	{
-		3002007,
-		"- Active sessions list redesign.\n"
+		4000004,
+		"- Allow sending animated emoji to Saved Messages "
+		"even without Telegram Premium.\n"
 
-		"- Fix disappearing emoji selector button.\n"
+		"- Premium: Suggest animated emoji by regular emoji "
+		"(can be disabled in Settings).\n"
 
-		"- Fix a crash in archived stickers loading.\n"
+		"- Premium: Show all suggested premium stickers "
+		"in a special section of the stickers panel.\n"
+
+		"- Premium: Allow hiding premium stickers special section "
+		"of the stickers panel.\n"
+
+		"- Fix a memory leak in RTMP livestreams.\n"
+
+		"- Fix some bot webview bugs on macOS.\n"
+
+		"- Fix forwarding of voice messages.\n"
+	},
+	{
+		4001002,
+		"- New reaction selector above the right click menu.\n"
+
+		"- Premium: Set any custom emoji reactions in private chats.\n"
+
+		"- Premium: Set any custom emoji as your profile status.\n"
+
+		"- Insert or copy custom emoji from pack preview.\n"
+	},
+	{
+		4002001,
+		"- Improve scaling / cropping for photos / video files.\n"
+
+		"- Improve touch support in channel comments.\n"
+
+		"- Nice animation for spoilers.\n"
+	},
+	{
+		4002002,
+		"- Fix crash in spoiler revealing in media captions.\n"
+
+		"- Fix spoiler revealing in media viewer captions.\n"
 		
-		"- Fix a crash in calls to old Telegram versions.\n"
-	},
-	{
-		3003001,
-		"- Switch between contacts list sorting modes.\n"
-
-		"- Sort contacts list by last seen time by default.\n"
-
-		"- Fix disappearing Send As Channel button after message editing.\n"
-
-		"- Fix file upload cancelling.\n"
-
-		"- Fix crash in video capture on macOS.\n"
-
-		"- Fix labels in the About box.\n"
-
-		"- Use Qt 6.2.2 for macOS and Linux builds.\n"
-
-		"- Allow installing x64 Windows version on Windows ARM.\n"
-	},
-	{
-		3003002,
-		"- Select text when typing and choose 'Formatting > Spoiler' in the "
-		"context menu to hide some or all of the contents of a message.\n"
-
-		"- Click on the spoiler in chat to reveal its hidden text.\n"
-
-		"- Spoiler formatting hides text in chat, "
-		"as well as in the chat list and notifications.\n"
-	},
-	{
-		3004005,
-		"- Fix crash in monospace blocks processing.\n"
-
-		"- Fix reaction animations stopping after an hour uptime.\n"
-	},
-	{
-		3004006,
-		"- Add snap layouts support on Windows 11.\n"
-		
-		"- Fix crash in drafts after accounts switching.\n"
+		"- Fix crash in folder editing on Linux.\n"
 	}
 	};
 };
 
 } // namespace
 
-Changelogs::Changelogs(not_null<Main::Session*> session, int oldVersion, int oldKotatoVersion)
+Changelogs::Changelogs(not_null<Main::Session*> session, int oldVersion)
 : _session(session)
-, _oldVersion(oldVersion)
-, _oldKotatoVersion(oldKotatoVersion) {
-
-	LOG(("Previous Kotatogram version: %1").arg(_oldKotatoVersion));
-
+, _oldVersion(oldVersion) {
 	_session->data().chatsListChanges(
 	) | rpl::filter([](Data::Folder *folder) {
 		return !folder;
 	}) | rpl::start_with_next([=] {
-		addKotatoLogs();
+		requestCloudLogs();
 	}, _chatsSubscription);
 }
 
@@ -107,40 +97,10 @@ std::unique_ptr<Changelogs> Changelogs::Create(
 		not_null<Main::Session*> session) {
 	auto &local = Core::App().domain().local();
 	const auto oldVersion = local.oldVersion();
-	const auto oldKotatoVersion = Local::oldKotatoVersion();
 	local.clearOldVersion();
-	return (oldVersion != 0
-		&& oldKotatoVersion < AppKotatoVersion)
-		? std::make_unique<Changelogs>(session, oldVersion, oldKotatoVersion)
+	return (oldVersion > 0 && oldVersion < AppVersion)
+		? std::make_unique<Changelogs>(session, oldVersion)
 		: nullptr;
-}
-
-void Changelogs::addKotatoLogs() {
-	_chatsSubscription.destroy();
-	
-	if (_addedSomeLocal) {
-		return;
-	}
-	auto baseLang = Lang::GetInstance().baseId();
-	auto currentLang = Lang::Id();
-	QString channelLink;
-
-	for (const auto language : { "ru", "uk", "be" }) {
-		if (baseLang.startsWith(QLatin1String(language)) || currentLang == QString(language)) {
-			channelLink = "https://t.me/kotatogram_ru";
-			break;
-		}
-	}
-
-	if (channelLink.isEmpty()) {
-		channelLink = "https://t.me/kotatogram";
-	}
-
-	const auto text = ktr("ktg_new_version",
-		{ "version", QString::fromLatin1(AppKotatoVersionStr) },
-		{ "td_version", QString::fromLatin1(AppVersionStr) },
-		{ "link", channelLink });
-	addLocalLog(text.trimmed());
 }
 
 void Changelogs::requestCloudLogs() {
@@ -177,7 +137,7 @@ void Changelogs::requestCloudLogs() {
 }
 
 void Changelogs::addLocalLogs() {
-	if (AppKotatoBetaVersion || cAlphaVersion()) {
+	if (AppBetaVersion || cAlphaVersion()) {
 		addBetaLogs();
 	}
 	if (!_addedSomeLocal) {
@@ -220,7 +180,7 @@ void Changelogs::addBetaLog(int changeVersion, const char *changes) {
 		return result.replace(simple, separator);
 	}();
 	const auto version = FormatVersionDisplay(changeVersion);
-	const auto log = qsl("New in version %1 beta:\n\n").arg(version) + text;
+	const auto log = u"New in version %1 beta:\n\n"_q.arg(version) + text;
 	addLocalLog(log);
 }
 

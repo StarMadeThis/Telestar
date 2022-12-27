@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #import <Cocoa/Cocoa.h>
 #include <sys/xattr.h>
 
-NSString *appName = @"Kotatogram.app";
+NSString *appName = @"Telegram.app";
 NSString *appDir = nil;
 NSString *workDir = nil;
 
@@ -54,7 +54,7 @@ void RemoveQuarantineAttribute(NSString *path) {
 
 void RemoveQuarantineFromBundle(NSString *path) {
 	RemoveQuarantineAttribute(path);
-	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/MacOS/Kotatogram"]);
+	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/MacOS/Telegram"]);
 	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/Helpers/crashpad_handler"]);
 	RemoveQuarantineAttribute([path stringByAppendingString:@"/Contents/Frameworks/Updater"]);
 }
@@ -91,10 +91,8 @@ int main(int argc, const char * argv[]) {
 	openLog();
 	pid_t procId = 0;
 	BOOL update = YES, toSettings = NO, autoStart = NO, startInTray = NO, freeType = NO;
-	BOOL customWorkingDir = NO, useEnvApi = YES;
+	BOOL customWorkingDir = NO;
 	NSString *key = nil;
-	NSString *customApiId = nil;
-	NSString *customApiHash = nil;
 	for (int i = 0; i < argc; ++i) {
 		if ([@"-workpath" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
 			if (++i < argc) {
@@ -122,12 +120,6 @@ int main(int argc, const char * argv[]) {
 			customWorkingDir = YES;
 		} else if ([@"-key" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
 			if (++i < argc) key = [NSString stringWithUTF8String:argv[i]];
-		} else if ([@"-no-env-api" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
-			useEnvApi = NO;
-		} else if ([@"-api-id" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
-			if (++i < argc) customApiId = [NSString stringWithUTF8String:argv[i]];
-		} else if ([@"-api-hash" isEqualToString:[NSString stringWithUTF8String:argv[i]]]) {
-			if (++i < argc) customApiHash = [NSString stringWithUTF8String:argv[i]];
 		}
 	}
 	if (!workDir) {
@@ -171,9 +163,9 @@ int main(int argc, const char * argv[]) {
 
 		writeLog([@"Starting update files iteration, path: " stringByAppendingString: srcEnum]);
 
-		// Take the Updater (this currently running binary) from the place where it was placed by Kotatogram
+		// Take the Updater (this currently running binary) from the place where it was placed by Telegram
 		// and copy it to the folder with the new version of the app (ready),
-		// so it won't be deleted when we will clear the "Kotatogram.app/Contents" folder.
+		// so it won't be deleted when we will clear the "Telegram.app/Contents" folder.
 		NSString *oldVersionUpdaterPath = [appDirFull stringByAppendingString: @"/Contents/Frameworks/Updater" ];
 		NSString *newVersionUpdaterPath = [srcEnum stringByAppendingString:[[NSArray arrayWithObjects:@"/", appName, @"/Contents/Frameworks/Updater", nil] componentsJoinedByString:@""]];
 		writeLog([[NSArray arrayWithObjects: @"Copying Updater from old path ", oldVersionUpdaterPath, @" to new path ", newVersionUpdaterPath, nil] componentsJoinedByString:@""]);
@@ -269,13 +261,6 @@ int main(int argc, const char * argv[]) {
 	if (customWorkingDir) {
 		[args addObject:@"-workdir"];
 		[args addObject:workDir];
-	}
-	if (!useEnvApi) [args addObject:@"-no-env-api"];
-	if (customApiId && customApiHash) {
-		[args addObject:@"-api-id"];
-		[args addObject:customApiId];
-		[args addObject:@"-api-hash"];
-		[args addObject:customApiHash];
 	}
 	writeLog([[NSArray arrayWithObjects:@"Running application '", appPath, @"' with args '", [args componentsJoinedByString:@"' '"], @"'..", nil] componentsJoinedByString:@""]);
 

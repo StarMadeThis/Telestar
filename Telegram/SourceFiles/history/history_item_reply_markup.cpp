@@ -49,13 +49,13 @@ void HistoryMessageMarkupData::fillRows(
 		return;
 	}
 
+	using Type = Button::Type;
 	rows.reserve(list.size());
 	for (const auto &row : list) {
 		row.match([&](const MTPDkeyboardButtonRow &data) {
 			auto row = std::vector<Button>();
 			row.reserve(data.vbuttons().v.size());
 			for (const auto &button : data.vbuttons().v) {
-				using Type = Button::Type;
 				button.match([&](const MTPDkeyboardButton &data) {
 					row.emplace_back(Type::Default, qs(data.vtext()));
 				}, [&](const MTPDkeyboardButtonCallback &data) {
@@ -121,12 +121,27 @@ void HistoryMessageMarkupData::fillRows(
 				}, [&](const MTPDinputKeyboardButtonUserProfile &data) {
 					LOG(("API Error: inputKeyboardButtonUserProfile."));
 					// Should not get those for the users.
+				}, [&](const MTPDkeyboardButtonWebView &data) {
+					row.emplace_back(
+						Type::WebView,
+						qs(data.vtext()),
+						data.vurl().v);
+				}, [&](const MTPDkeyboardButtonSimpleWebView &data) {
+					row.emplace_back(
+						Type::SimpleWebView,
+						qs(data.vtext()),
+						data.vurl().v);
 				});
 			}
 			if (!row.empty()) {
 				rows.push_back(std::move(row));
 			}
 		});
+	}
+	if (rows.size() == 1
+		&& rows.front().size() == 1
+		&& rows.front().front().type == Type::Buy) {
+		flags |= ReplyMarkupFlag::OnlyBuyButton;
 	}
 }
 
@@ -147,7 +162,8 @@ HistoryMessageMarkupData::HistoryMessageMarkupData(
 		placeholder = QString();
 		fillRows(data.vrows().v);
 	}, [&](const MTPDreplyKeyboardHide &data) {
-		flags = Flag::None | (data.is_selective() ? Flag::Selective : Flag());
+		flags = Flag::None
+			| (data.is_selective() ? Flag::Selective : Flag());
 		placeholder = QString();
 	}, [&](const MTPDreplyKeyboardForceReply &data) {
 		flags = Flag::ForceReply

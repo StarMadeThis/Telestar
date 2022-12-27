@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 bool _debug = false;
 
 wstring updaterName, updaterDir, updateTo, exeName, customWorkingDir, customKeyFile;
-wstring customApiId, customApiHash;
 
 bool equal(const wstring &a, const wstring &b) {
 	return !_wcsicmp(a.c_str(), b.c_str());
@@ -205,7 +204,7 @@ bool update() {
 					writeLog(L"Error: bad update, has Updater.exe! '" + tofname + L"' equal '" + updaterName + L"'");
 					delFolder();
 					return false;
-				} else if (equal(tofname, updateTo + L"Kotatogram.exe") && exeName != L"Kotatogram.exe") {
+				} else if (equal(tofname, updateTo + L"Telegram.exe") && exeName != L"Telegram.exe") {
 					wstring fullBinaryPath = updateTo + exeName;
 					writeLog(L"Target binary found: '" + tofname + L"', changing to '" + fullBinaryPath + L"'");
 					tofname = fullBinaryPath;
@@ -262,7 +261,7 @@ bool update() {
 			if (!copyResult) {
 				writeLog(L"Error: failed to copy, asking to retry..");
 				WCHAR errMsg[2048];
-				wsprintf(errMsg, L"Failed to update Kotatogram :(\n%s is not accessible.", tofname.c_str());
+				wsprintf(errMsg, L"Failed to update Telegram :(\n%s is not accessible.", tofname.c_str());
 				if (MessageBox(0, errMsg, L"Update error!", MB_ICONERROR | MB_RETRYCANCEL) != IDRETRY) {
 					delFolder();
 					return false;
@@ -281,7 +280,7 @@ void updateRegistry() {
 		writeLog(L"Updating registry..");
 		versionStr[versionLen / 2] = 0;
 		HKEY rkey;
-		LSTATUS status = RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C4A4AE8F-B9F7-4CC7-8A6C-BF7EEE87ACA5}_is1", 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &rkey);
+		LSTATUS status = RegOpenKeyEx(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{53F49750-6209-4FBF-9CA8-7A333C87D1ED}_is1", 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &rkey);
 		if (status == ERROR_SUCCESS) {
 			writeLog(L"Checking registry install location..");
 			static const int bufSize = 4096;
@@ -308,16 +307,16 @@ void updateRegistry() {
 								SYSTEMTIME stLocalTime;
 								GetLocalTime(&stLocalTime);
 								RegSetValueEx(rkey, L"DisplayVersion", 0, REG_SZ, (const BYTE*)versionStr, ((versionLen / 2) + 1) * sizeof(WCHAR));
-								wsprintf(nameStr, L"Kotatogram Desktop version %s", versionStr);
+								wsprintf(nameStr, L"Telegram Desktop");
 								RegSetValueEx(rkey, L"DisplayName", 0, REG_SZ, (const BYTE*)nameStr, (wcslen(nameStr) + 1) * sizeof(WCHAR));
-								wsprintf(publisherStr, L"Kotatogram");
+								wsprintf(publisherStr, L"Telegram FZ-LLC");
 								RegSetValueEx(rkey, L"Publisher", 0, REG_SZ, (const BYTE*)publisherStr, (wcslen(publisherStr) + 1) * sizeof(WCHAR));
-								wsprintf(icongroupStr, L"Kotatogram Desktop");
+								wsprintf(icongroupStr, L"Telegram Desktop");
 								RegSetValueEx(rkey, L"Inno Setup: Icon Group", 0, REG_SZ, (const BYTE*)icongroupStr, (wcslen(icongroupStr) + 1) * sizeof(WCHAR));
 								wsprintf(dateStr, L"%04d%02d%02d", stLocalTime.wYear, stLocalTime.wMonth, stLocalTime.wDay);
 								RegSetValueEx(rkey, L"InstallDate", 0, REG_SZ, (const BYTE*)dateStr, (wcslen(dateStr) + 1) * sizeof(WCHAR));
 
-								const WCHAR *appURL = L"https://t.me/kotatogram";
+								const WCHAR *appURL = L"https://desktop.telegram.org";
 								RegSetValueEx(rkey, L"HelpLink", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
 								RegSetValueEx(rkey, L"URLInfoAbout", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
 								RegSetValueEx(rkey, L"URLUpdateInfo", 0, REG_SZ, (const BYTE*)appURL, (wcslen(appURL) + 1) * sizeof(WCHAR));
@@ -345,7 +344,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	int argsCount;
 
 	bool needupdate = false, autostart = false, debug = false, writeprotected = false, startintray = false, freetype = false;
-	bool useEnvApi = true;
 	args = CommandLineToArgvW(GetCommandLine(), &argsCount);
 	if (args) {
 		for (int i = 1; i < argsCount; ++i) {
@@ -381,22 +379,14 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 				exeName = args[i];
 				for (int j = 0, l = exeName.size(); j < l; ++j) {
 					if (exeName[j] == L'/' || exeName[j] == L'\\') {
-						exeName = L"Kotatogram.exe";
+						exeName = L"Telegram.exe";
 						break;
 					}
 				}
-			} else if (equal(args[i], L"-no-env-api")) {
-				useEnvApi = false;
-			} else if (equal(args[i], L"-api-id") && ++i < argsCount) {
-				writeLog(std::wstring(L"Argument: ") + args[i]);
-				customApiId = args[i];
-			} else if (equal(args[i], L"-api-hash") && ++i < argsCount) {
-				writeLog(std::wstring(L"Argument: ") + args[i]);
-				customApiHash = args[i];
 			}
 		}
 		if (exeName.empty()) {
-			exeName = L"Kotatogram.exe";
+			exeName = L"Telegram.exe";
 		}
 		if (needupdate) writeLog(L"Need to update!");
 		if (autostart) writeLog(L"From autostart!");
@@ -444,11 +434,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	}
 	if (!customKeyFile.empty()) {
 		targs += L" -key \"" + customKeyFile + L"\"";
-	}
-	if (!useEnvApi) targs += L" -no-env-api";
-	if (!customApiId.empty() && !customApiHash.empty()) {
-		targs += L" -api-id \"" + customApiId + L"\"";
-		targs += L" -api-hash \"" + customApiHash + L"\"";
 	}
 	writeLog(L"Result arguments: " + targs);
 
@@ -509,7 +494,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE prevInstance, LPWSTR cmdPara
 	return 0;
 }
 
-static const WCHAR *_programName = L"Kotatogram Desktop"; // folder in APPDATA, if current path is unavailable for writing
+static const WCHAR *_programName = L"Telegram Desktop"; // folder in APPDATA, if current path is unavailable for writing
 static const WCHAR *_exeName = L"Updater.exe";
 
 LPTOP_LEVEL_EXCEPTION_FILTER _oldWndExceptionFilter = 0;

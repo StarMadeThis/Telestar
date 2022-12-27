@@ -266,7 +266,7 @@ bool update(bool writeprotected) {
 						writeLog("Error: bad update, has Updater! '%s' equal '%s'", tofname.c_str(), updaterName.c_str());
 						delFolder();
 						return false;
-					} else if (equal(tofname, exePath + "Kotatogram") && exeName != "Kotatogram") {
+					} else if (equal(tofname, exePath + "Telegram") && exeName != "Telegram") {
 						string fullBinaryPath = exePath + exeName;
 						writeLog("Target binary found: '%s', changing to '%s'", tofname.c_str(), fullBinaryPath.c_str());
 						tofname = fullBinaryPath;
@@ -362,12 +362,9 @@ int main(int argc, char *argv[]) {
 	bool tosettings = false;
 	bool startintray = false;
 	bool customWorkingDir = false;
-	bool useEnvApi = true;
 
 	char *key = 0;
 	char *workdir = 0;
-	char *customApiId = 0;
-	char *customApiHash = 0;
 	for (int i = 1; i < argc; ++i) {
 		if (equal(argv[i], "-noupdate")) {
 			needupdate = false;
@@ -391,16 +388,10 @@ int main(int argc, char *argv[]) {
 			exeName = argv[i];
 		} else if (equal(argv[i], "-exepath") && ++i < argc) {
 			exePath = argv[i];
-		} else if (equal(argv[i], "-no-env-api")) {
-			useEnvApi = false;
-		} else if (equal(argv[i], "-api-id") && ++i < argc) {
-			customApiId = argv[i];
-		} else if (equal(argv[i], "-api-hash") && ++i < argc) {
-			customApiHash = argv[i];
 		}
 	}
 	if (exeName.empty() || exeName.find('/') != string::npos) {
-		exeName = "Kotatogram";
+		exeName = "Telegram";
 	}
 	openLog();
 
@@ -432,7 +423,6 @@ int main(int argc, char *argv[]) {
 					customWorkingDir = false;
 
 					writeLog("No workdir, trying to figure it out");
-					/*
 					struct passwd *pw = getpwuid(getuid());
 					if (pw && pw->pw_dir && strlen(pw->pw_dir)) {
 						string tryDir = pw->pw_dir + string("/.TelegramDesktop/");
@@ -446,7 +436,6 @@ int main(int argc, char *argv[]) {
 							}
 						}
 					}
-					*/
 					if (workDir.empty()) {
 						workDir = exePath;
 
@@ -495,14 +484,6 @@ int main(int argc, char *argv[]) {
 		push(workdir);
 	}
 
-	if (!useEnvApi) push("-no-env-api");
-	if (customApiId && customApiHash) {
-		push("-api-id");
-		push(customApiId);
-		push("-api-hash");
-		push(customApiHash);
-	}
-
 	auto args = vector<char*>();
 	for (auto &arg : values) {
 		args.push_back(arg.data());
@@ -522,7 +503,7 @@ int main(int argc, char *argv[]) {
 		}
 	}
 
-	writeLog("Executed Kotatogram, closing log and quitting..");
+	writeLog("Executed Telegram, closing log and quitting..");
 	closeLog();
 
 	return 0;

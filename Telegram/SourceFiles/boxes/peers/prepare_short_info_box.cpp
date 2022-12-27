@@ -36,11 +36,13 @@ struct UserpicState {
 	PeerShortInfoUserpic current;
 	std::optional<UserPhotosSlice> userSlice;
 	PhotoId userpicPhotoId = PeerData::kUnknownPhotoId;
-	std::shared_ptr<Data::CloudImageView> userpicView;
+	Ui::PeerUserpicView userpicView;
 	std::shared_ptr<Data::PhotoMedia> photoView;
 	std::vector<std::shared_ptr<Data::PhotoMedia>> photoPreloads;
 	InMemoryKey userpicKey;
 	PhotoId photoId = PeerData::kUnknownPhotoId;
+	std::array<QImage, 4> roundMask;
+	int size = 0;
 	bool waitingFull = false;
 	bool waitingLoad = false;
 };
@@ -50,16 +52,16 @@ void GenerateImage(
 		QImage image,
 		bool blurred = false) {
 	using namespace Images;
-	const auto size = st::shortInfoWidth;
+	const auto size = state->size;
 	const auto ratio = style::DevicePixelRatio();
-	const auto options = Option::RoundSmall
-		| Option::RoundSkipBottomLeft
-		| Option::RoundSkipBottomRight
-		| (blurred ? Option::Blur : Option());
-	state->current.photo = Images::Prepare(
-		std::move(image),
-		QSize(size, size) * ratio,
-		{ .options = options, .outer = { size, size } });
+	const auto options = blurred ? Option::Blur : Option();
+	state->current.photo = Images::Round(
+		Images::Prepare(
+			std::move(image),
+			QSize(size, size) * ratio,
+			{ .options = options, .outer = { size, size } }),
+		state->roundMask,
+		RectPart::TopLeft | RectPart::TopRight);
 }
 
 void GenerateImage(
@@ -74,27 +76,26 @@ void ProcessUserpic(
 		not_null<UserpicState*> state) {
 	state->current.videoDocument = nullptr;
 	state->userpicKey = peer->userpicUniqueKey(state->userpicView);
-	if (!state->userpicView) {
+	if (!state->userpicView.cloud) {
 		GenerateImage(
 			state,
 			peer->generateUserpicImage(
 				state->userpicView,
 				st::shortInfoWidth * style::DevicePixelRatio(),
-				ImageRoundRadius::None),
+				0),
 			false);
 		state->current.photoLoadingProgress = 1.;
 		state->photoView = nullptr;
 		return;
 	}
 	peer->loadUserpic();
-	const auto image = state->userpicView->image();
-	if (!image) {
+	if (Ui::PeerUserpicLoading(state->userpicView)) {
 		state->current.photoLoadingProgress = 0.;
 		state->current.photo = QImage();
 		state->waitingLoad = true;
 		return;
 	}
-	GenerateImage(state, image, true);
+	GenerateImage(state, *state->userpicView.cloud, true);
 	state->current.photoLoadingProgress = peer->userpicPhotoId() ? 0. : 1.;
 	state->photoView = nullptr;
 }
@@ -113,7 +114,9 @@ void Preload(
 				: Data::FileOriginUserPhoto(peerToUser(peer->id), photo->id);
 			state->photoPreloads.push_back(photo->createMediaView());
 			if (photo->hasVideo()) {
-				state->photoPreloads.back()->videoWanted(origin);
+				state->photoPreloads.back()->videoWanted(
+					Data::PhotoSize::Large,
+					origin);
 			} else {
 				state->photoPreloads.back()->wanted(
 					Data::PhotoSize::Large,
@@ -205,7 +208,7 @@ void ProcessFullPhoto(
 		const auto user = peer->asUser();
 		const auto username = peer->userName();
 		return PeerShortInfoFields{
-			.name = peer->name,
+			.name = peer->name(),
 			.phone = user ? Ui::FormatPhone(user->phone()) : QString(),
 			.link = ((user || username.isEmpty())
 				? QString()
@@ -350,14 +353,19 @@ bool ProcessCurrent(
 }
 
 [[nodiscard]] PreparedShortInfoUserpic UserpicValue(
-		not_null<PeerData*> peer) {
+		not_null<PeerData*> peer,
+		const style::ShortInfoCover &st) {
 	const auto moveRequests = std::make_shared<rpl::event_stream<int>>();
 	auto move = [=](int shift) {
 		moveRequests->fire_copy(shift);
 	};
+	const auto size = st.size;
+	const auto radius = st.radius;
 	auto value = [=](auto consumer) {
 		auto lifetime = rpl::lifetime();
 		const auto state = lifetime.make_state<UserpicState>();
+		state->size = size;
+		state->roundMask = Images::CornersMask(radius);
 		const auto push = [=](bool force = false) {
 			if (ProcessCurrent(peer, state) || force) {
 				consumer.put_next_copy(state->current);
@@ -402,7 +410,7 @@ bool ProcessCurrent(
 			return state->waitingLoad
 				&& (state->photoView
 					? (!!state->photoView->image(Data::PhotoSize::Large))
-					: (state->userpicView && state->userpicView->image()));
+					: (!Ui::PeerUserpicLoading(state->userpicView)));
 		}) | rpl::start_with_next([=] {
 			push();
 		}, lifetime);
@@ -421,7 +429,7 @@ object_ptr<Ui::BoxContent> PrepareShortInfoBox(
 		: peer->isBroadcast()
 		? PeerShortInfoType::Channel
 		: PeerShortInfoType::Group;
-	auto userpic = UserpicValue(peer);
+	auto userpic = UserpicValue(peer, st::shortInfoCover);
 	auto result = Box<PeerShortInfoBox>(
 		type,
 		FieldsValue(peer),
@@ -456,6 +464,8 @@ rpl::producer<QString> PrepareShortInfoStatus(not_null<PeerData*> peer) {
 	return StatusValue(peer);
 }
 
-PreparedShortInfoUserpic PrepareShortInfoUserpic(not_null<PeerData*> peer) {
-	return UserpicValue(peer);
+PreparedShortInfoUserpic PrepareShortInfoUserpic(
+		not_null<PeerData*> peer,
+		const style::ShortInfoCover &st) {
+	return UserpicValue(peer, st);
 }

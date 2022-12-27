@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/panel_animation.h"
 #include "ui/ui_utility.h"
 #include "ui/filter_icons.h"
+#include "ui/painter.h"
 #include "ui/cached_round_corners.h"
 #include "lang/lang_keys.h"
 #include "core/application.h"
@@ -26,52 +27,51 @@ constexpr auto kIconsPerRow = 6;
 
 constexpr auto kIcons = std::array{
 	FilterIcon::Cat,
-	FilterIcon::Crown,
-	FilterIcon::Favorite,
-	FilterIcon::Flower,
+	FilterIcon::Book,
+	FilterIcon::Money,
+	// FilterIcon::Camera,
 	FilterIcon::Game,
+	// FilterIcon::House,
+	FilterIcon::Light,
+	FilterIcon::Like,
+	// FilterIcon::Plus,
+	FilterIcon::Note,
+	FilterIcon::Palette,
+	FilterIcon::Travel,
+	FilterIcon::Sport,
+	FilterIcon::Favorite,
+	FilterIcon::Study,
+	FilterIcon::Airplane,
+	// FilterIcon::Microbe,
+	// FilterIcon::Worker,
+	FilterIcon::Private,
+	FilterIcon::Groups,
+	FilterIcon::All,
+	FilterIcon::Unread,
+	// FilterIcon::Check,
+	FilterIcon::Bots,
+	// FilterIcon::Folders,
+	FilterIcon::Crown,
+	FilterIcon::Flower,
 	FilterIcon::Home,
 	FilterIcon::Love,
 	FilterIcon::Mask,
 	FilterIcon::Party,
-	FilterIcon::Sport,
-	FilterIcon::Study,
 	FilterIcon::Trade,
-	FilterIcon::Travel,
 	FilterIcon::Work,
-
-	FilterIcon::All,
-	FilterIcon::Unread,
 	FilterIcon::Unmuted,
-	FilterIcon::Bots,
 	FilterIcon::Channels,
-	FilterIcon::Groups,
-	FilterIcon::Private,
 	FilterIcon::Custom,
 	FilterIcon::Setup,
-};
-
-constexpr auto kLocalIcons = std::array{
-	FilterIcon::LocalBook,
-	FilterIcon::LocalBrackets,
-	FilterIcon::LocalCandle,
-	FilterIcon::LocalCity,
-	FilterIcon::LocalDesktop,
-	FilterIcon::LocalEarth,
-	FilterIcon::LocalMusic,
-	FilterIcon::LocalNews,
-	FilterIcon::LocalPhone,
-	FilterIcon::LocalSmile,
-	FilterIcon::LocalSun,
-	FilterIcon::LocalVideo,
+	// FilterIcon::Poo,
 };
 
 } // namespace
 
-FilterIconPanel::FilterIconPanel(QWidget *parent, bool isLocal)
+FilterIconPanel::FilterIconPanel(QWidget *parent)
 : RpWidget(parent)
 , _inner(Ui::CreateChild<Ui::RpWidget>(this))
-, _isLocal(isLocal) {
+, _innerBg(ImageRoundRadius::Small, st::dialogsBg) {
 	setup();
 }
 
@@ -104,9 +104,7 @@ void FilterIconPanel::setup() {
 }
 
 void FilterIconPanel::setupInner() {
-	const auto count = kIcons.size() + (_isLocal
-		? kLocalIcons.size()
-		: 0);
+	const auto count = kIcons.size();
 	const auto rows = (count / kIconsPerRow)
 		+ ((count % kIconsPerRow) ? 1 : 0);
 	const auto single = st::windowFilterIconSingle;
@@ -120,11 +118,7 @@ void FilterIconPanel::setupInner() {
 	_inner->paintRequest(
 		) | rpl::start_with_next([=](QRect clip) {
 		auto p = Painter(_inner);
-		Ui::FillRoundRect(
-			p,
-			_inner->rect(),
-			st::emojiPanBg,
-			ImageRoundRadius::Small);
+		_innerBg.paint(p, _inner->rect());
 		p.setFont(st::emojiPanHeaderFont);
 		p.setPen(st::emojiPanHeaderFg);
 		p.drawTextLeft(
@@ -139,34 +133,21 @@ void FilterIconPanel::setupInner() {
 			if (!rect.intersects(clip)) {
 				continue;
 			}
-			if (i == selected) {
+			const auto over = (i == selected);
+			if (over) {
 				Ui::FillRoundRect(
 					p,
 					rect,
-					st::emojiPanHover,
+					st::dialogsBgOver,
 					Ui::StickerHoverCorners);
 			}
 			const auto icon = LookupFilterIcon(kIcons[i]).normal;
-			icon->paintInCenter(p, rect, st::emojiIconFg->c);
-		}
-		if (_isLocal) {
-			const auto cloudSize = kIcons.size();
-			const auto fullSize = kIcons.size() + kLocalIcons.size();
-			for (auto i = cloudSize; i != fullSize; ++i) {
-				const auto rect = countRect(i);
-				if (!rect.intersects(clip)) {
-					continue;
-				}
-				if (i == selected) {
-					Ui::FillRoundRect(
-						p,
-						rect,
-						st::emojiPanHover,
-						StickerHoverCorners);
-				}
-				const auto icon = LookupFilterIcon(kLocalIcons[i-cloudSize]).normal;
-				icon->paintInCenter(p, rect, st::emojiIconFg->c);
-			}
+			icon->paintInCenter(
+				p,
+				rect,
+				(over
+					? st::dialogsUnreadBgMutedOver
+					: st::dialogsUnreadBgMuted)->c);
 		}
 	}, _inner->lifetime());
 
@@ -240,11 +221,7 @@ void FilterIconPanel::mouseMove(QPoint position) {
 		const auto column = point.x() / st::windowFilterIconSingle.width();
 		const auto row = point.y() / st::windowFilterIconSingle.height();
 		const auto index = row * kIconsPerRow + column;
-		const auto size = kIcons.size()
-			+ (_isLocal
-				? kLocalIcons.size()
-				: 0);
-		setSelected(index < size ? index : -1);
+		setSelected(index < kIcons.size() ? index : -1);
 	}
 }
 
@@ -262,12 +239,8 @@ void FilterIconPanel::mouseRelease(Qt::MouseButton button) {
 	const auto pressed = _pressed;
 	setPressed(-1);
 	if (pressed == _selected && pressed >= 0) {
-		Assert(pressed < kIcons.size() + (_isLocal
-				? kLocalIcons.size()
-				: 0));
-		_chosen.fire_copy(pressed < kIcons.size()
-			? kIcons[pressed]
-			: kLocalIcons[pressed-kIcons.size()]);
+		Assert(pressed < kIcons.size());
+		_chosen.fire_copy(kIcons[pressed]);
 	}
 }
 

@@ -111,7 +111,7 @@ private:
 	void requestPapers();
 	void sortPapers();
 	void paintPaper(
-		Painter &p,
+		QPainter &p,
 		const Paper &paper,
 		int column,
 		int row) const;
@@ -176,11 +176,11 @@ void BackgroundBox::removePaper(const Data::WallPaper &paper) {
 		)).send();
 	};
 	_controller->show(
-		Box<Ui::ConfirmBox>(
-			tr::lng_background_sure_delete(tr::now),
-			tr::lng_selected_delete(tr::now),
-			tr::lng_cancel(tr::now),
-			remove),
+		Ui::MakeConfirmBox({
+			.text = tr::lng_background_sure_delete(),
+			.confirmed = remove,
+			.confirmText = tr::lng_selected_delete(),
+		}),
 		Ui::LayerOption::KeepOther);
 }
 
@@ -289,7 +289,7 @@ void BackgroundBox::Inner::resizeToContentAndPreload() {
 
 void BackgroundBox::Inner::paintEvent(QPaintEvent *e) {
 	QRect r(e->rect());
-	Painter p(this);
+	auto p = QPainter(this);
 
 	if (_papers.empty()) {
 		p.setFont(st::noContactsFont);
@@ -361,7 +361,7 @@ void BackgroundBox::Inner::validatePaperThumbnail(
 }
 
 void BackgroundBox::Inner::paintPaper(
-		Painter &p,
+		QPainter &p,
 		const Paper &paper,
 		int column,
 		int row) const {

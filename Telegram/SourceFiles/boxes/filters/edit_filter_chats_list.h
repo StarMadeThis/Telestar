@@ -28,12 +28,16 @@ class Painter;
 
 [[nodiscard]] QString FilterChatsTypeName(Data::ChatFilter::Flag flag);
 void PaintFilterChatsTypeIcon(
-	Painter &p,
+	QPainter &p,
 	Data::ChatFilter::Flag flag,
 	int x,
 	int y,
 	int outerWidth,
 	int size);
+
+[[nodiscard]] object_ptr<Ui::RpWidget> CreatePeerListSectionSubtitle(
+	not_null<QWidget*> parent,
+	rpl::producer<QString> text);
 
 class EditFilterChatsListController final : public ChatsListBoxController {
 public:
@@ -45,8 +49,7 @@ public:
 		rpl::producer<QString> title,
 		Flags options,
 		Flags selected,
-		const base::flat_set<not_null<History*>> &peers,
-		bool isLocal);
+		const base::flat_set<not_null<History*>> &peers);
 
 	[[nodiscard]] Main::Session &session() const override;
 	[[nodiscard]] Flags chosenOptions() const {
@@ -59,6 +62,7 @@ public:
 	bool handleDeselectForeignRow(PeerListRowId itemId) override;
 
 private:
+	int selectedTypesCount() const;
 	void prepareViewHook() override;
 	std::unique_ptr<Row> createRow(not_null<History*> history) override;
 	[[nodiscard]] object_ptr<Ui::RpWidget> prepareTypesList();
@@ -70,9 +74,11 @@ private:
 	base::flat_set<not_null<History*>> _peers;
 	Flags _options;
 	Flags _selected;
-	bool _isLocal;
+	int _limit = 0;
 
 	Fn<void(PeerListRowId)> _deselectOption;
+
+	PeerListContentDelegate *_typesDelegate = nullptr;
 
 	rpl::lifetime _lifetime;
 
