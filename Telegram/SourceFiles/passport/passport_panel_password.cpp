@@ -38,7 +38,7 @@ PanelAskPassword::PanelAskPassword(
 	tr::lng_passport_request1(
 		tr::now,
 		lt_bot,
-		_controller->bot()->name),
+		_controller->bot()->name()),
 	st::passportPasswordLabelBold)
 , _about2(
 	this,
@@ -179,7 +179,7 @@ void PanelNoPassword::setupContent() {
 				tr::lng_passport_request1(
 					tr::now,
 					lt_bot,
-					_controller->bot()->name),
+					_controller->bot()->name()),
 				st::passportPasswordLabelBold)),
 		st::passportPasswordAbout1Padding)->entity();
 
@@ -248,6 +248,8 @@ void PanelNoPassword::refreshBottom() {
 			container,
 			tr::lng_cancel(),
 			st::defaultBoxButton);
+		cancel->setTextTransform(
+			Ui::RoundButton::TextTransform::NoTransform);
 		cancel->addClickHandler([=] {
 			_controller->cancelPasswordSubmit();
 		});
@@ -255,6 +257,8 @@ void PanelNoPassword::refreshBottom() {
 			container,
 			tr::lng_passport_email_validate(),
 			st::defaultBoxButton);
+		validate->setTextTransform(
+			Ui::RoundButton::TextTransform::NoTransform);
 		validate->addClickHandler([=] {
 			_controller->validateRecoveryEmail();
 		});
